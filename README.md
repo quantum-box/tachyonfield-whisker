@@ -1,6 +1,16 @@
-# TACHYON Field
+# TACHYON Field (Whisker)
 
-A [Whisker](https://github.com/whiskerrs/whisker) app.
+The TACHYON Field mobile app, built in Rust with [Whisker](https://github.com/whiskerrs/whisker).
+It talks to the TACHYON Field API and uses native iOS parts (UITabBar, UITableView,
+Liquid Glass, sheets) through the `glass/` (`field-glass`) Whisker module.
+
+- Sign in with the same Cognito client as the Field web app
+- Switch companies from the sidebar (searchable sheet)
+- Areas in the sidebar decide the bottom tabs
+- Lists with search and pull to refresh
+- Field Agent chat, streamed over SSE
+
+Licensed under the [MIT License](LICENSE).
 
 ## Develop
 
