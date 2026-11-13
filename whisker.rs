@@ -7,9 +7,9 @@ fn main() {
         .unwrap_or(1);
     whisker_cng::run(move |app| {
         app.name("TACHYON Field")
-            .bundle_id("app.txcloud.tachyonfield.whisker")
+            .bundle_id("com.quantumbox.tachyonfield")
             .background("#FFFFFF")
-            .version("0.1.0")
+            .version("0.2.0")
             .build_number(build_number);
 
         app.android(|a| {
@@ -21,7 +21,7 @@ fn main() {
         });
 
         app.ios(|i| {
-            i.bundle_id("app.txcloud.tachyonfield.whisker")
+            i.bundle_id("com.quantumbox.tachyonfield")
                 .scheme("TACHYON Field")
                 .deployment_target("15.0");
         });
