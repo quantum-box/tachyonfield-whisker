@@ -7,7 +7,7 @@ import PackageDescription
 
 let package = Package(
     name: "field-glass",
-    platforms: [.iOS(.v13)],
+    platforms: [.iOS(.v15)],
     products: [
         .library(name: "FieldGlass", targets: ["FieldGlass"]),
     ],
