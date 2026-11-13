@@ -63,9 +63,17 @@ fn root() -> Element {
     let insets = safe_area_insets();
 
     // 前回のサインインが残っていれば、パスワードなしで入り直す。
-    let saved = storage::refresh_token();
-    let restoring = signal(saved.is_some());
-    if let Some(refresh_token) = saved {
+    // 通信の失敗で入り直せなかったときは、保存したものを消さずに「もう一度」を出す。
+    // 消すのは、Cognito にトークンを断られたとき（期限切れ・取り消し済み）だけ。
+    let restoring = signal(storage::refresh_token().is_some());
+    let restore_error = signal(String::new());
+    let restore = move || {
+        let Some(refresh_token) = storage::refresh_token() else {
+            restoring.set(false);
+            return;
+        };
+        restoring.set(true);
+        restore_error.set(String::new());
         spawn_local(async move {
             let result = run_blocking(move || api::refresh(&refresh_token)).await;
             match result {
@@ -76,11 +84,13 @@ fn root() -> Element {
                     tenant.set(storage::tenant());
                     token.set(Some(session.access_token));
                 }
-                Err(_) => storage::forget_all(),
+                Err(error) if error == api::EXPIRED => storage::forget_all(),
+                Err(error) => restore_error.set(error),
             }
             restoring.set(false);
         });
-    }
+    };
+    restore();
 
     render! {
         View(
@@ -99,8 +109,20 @@ fn root() -> Element {
             Show(when: move || restoring.get()) {
                 Notice(message: "読み込み中…")
             }
+            Show(when: move || !restoring.get() && !restore_error.with(String::is_empty)) {
+                RestoreFailed(
+                    message: computed(move || restore_error.get()),
+                    on_retry: move |_| restore(),
+                    on_sign_in: move |_| {
+                        storage::forget_all();
+                        restore_error.set(String::new());
+                    },
+                )
+            }
             // 復元が終わるまでは、どの画面も作らない（会社が決まる前に一覧を読み始めないため）。
-            Show(when: move || !restoring.get() && token.with(Option::is_none)) {
+            Show(
+                when: move || !restoring.get() && restore_error.with(String::is_empty) && token.with(Option::is_none),
+            ) {
                 Login(token: token)
             }
             Show(
@@ -119,6 +141,61 @@ fn root() -> Element {
                 },
                 key: |id: &String| id.clone(),
                 children: move |_: ReadSignal<String>| render! { Home(token: token, tenant: tenant) },
+            )
+        }
+    }
+}
+
+/// 起動時に通信できず入り直せなかったとき：理由と「もう一度」「サインインし直す」。
+#[component]
+fn restore_failed(
+    message: Signal<String>,
+    on_retry: Callback<()>,
+    on_sign_in: Callback<()>,
+) -> Element {
+    render! {
+        View(
+            style: css!(
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                gap: px(16),
+                padding: (px(64), px(32)),
+            ),
+        ) {
+            Text(
+                value: "サインインを確かめられませんでした",
+                style: css!(color: Color::hex(LABEL), font_size: px(20), font_weight: FontWeight::Bold),
+            )
+            Text(
+                value: message,
+                style: css!(
+                    color: Color::hex(SECONDARY_LABEL),
+                    font_size: px(15),
+                    text_align: TextAlign::Center,
+                ),
+            )
+            View(
+                style: css!(
+                    padding: (px(12), px(28)),
+                    border_radius: px(22),
+                    background_color: Color::hex(TINT),
+                ),
+                on_tap: move |_| on_retry.run(()),
+            ) {
+                Text(
+                    value: "もう一度",
+                    style: css!(
+                        color: Color::hex(0xFFFFFF),
+                        font_size: px(17),
+                        font_weight: FontWeight::Bold,
+                    ),
+                )
+            }
+            Text(
+                value: "サインインし直す",
+                style: css!(color: Color::hex(TINT), font_size: px(15)),
+                on_tap: move |_| on_sign_in.run(()),
             )
         }
     }
@@ -1107,7 +1184,9 @@ fn feature_list(
     render! {
         Show(
             when: move || selected.with(Option::is_none),
-            fallback: move || render! { ItemDetail(feature: feature, selected: selected) },
+            fallback: move || render! {
+                ItemDetail(token: token, tenant: tenant, feature: feature, selected: selected)
+            },
         ) {
             View(style: screen_style()) {
                 NavBar(
@@ -1151,7 +1230,11 @@ fn load_list(
     };
     spawn_local(async move {
         let result = authed(token, move |access| {
-            api::fetch_list(access, &current, feature.path, feature.list_key)
+            let mut list = api::fetch_list(access, &current, feature.path, feature.list_key)?;
+            if feature.path.starts_with("/v1/erp/deals") {
+                api::resolve_pipelines(access, &current, &mut list);
+            }
+            Ok(list)
         })
         .await;
         loading.set(false);
@@ -1327,10 +1410,49 @@ fn with_list<R>(list: Signal<Vec<Value>>, f: impl FnOnce(&Vec<Value>) -> R) -> R
 
 // ---------------------------------------------------------------- 1 件の詳細
 
+/// 詳細画面。一覧の応答に無い項目がある機能（販売契約の備考・明細など）は、
+/// 開いたあとで 1 件を取り直し、届いたら描き直す。
+#[component]
+fn item_detail(
+    token: RwSignal<Option<String>>,
+    tenant: RwSignal<Option<Tenant>>,
+    feature: Feature,
+    selected: RwSignal<Option<Value>>,
+) -> Element {
+    let record = signal(selected.get_untracked().unwrap_or_default());
+    let version = signal(0_usize);
+    if let (Some(template), Some(current)) = (feature.detail_path, tenant.get_untracked()) {
+        let id = features::id(&record.get_untracked());
+        if !id.is_empty() {
+            let path = template.replace("{id}", &id);
+            spawn_local(async move {
+                let result = authed(token, move |access| {
+                    api::fetch_record(access, &current, &path)
+                })
+                .await;
+                if let Ok(full) = result {
+                    if full.is_object() {
+                        record.set(full);
+                        version.update(|v| *v += 1);
+                    }
+                }
+            });
+        }
+    }
+    render! {
+        ForEach(
+            each: move || vec![version.get()],
+            key: |v: &usize| *v,
+            children: move |_: ReadSignal<usize>| render! {
+                DetailBody(feature: feature, item: record.get_untracked(), selected: selected)
+            },
+        )
+    }
+}
+
 /// 連絡先アプリのような詳細画面：上に名前、その下に項目と明細。
 #[component]
-fn item_detail(feature: Feature, selected: RwSignal<Option<Value>>) -> Element {
-    let item = selected.get_untracked().unwrap_or_default();
+fn detail_body(feature: Feature, item: Value, selected: RwSignal<Option<Value>>) -> Element {
     let title = signal(features::title(&feature, &item));
     let status = signal(features::trailing(&feature, &item));
     let rows = features::detail_rows(&feature, &item);
