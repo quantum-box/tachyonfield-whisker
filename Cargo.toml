@@ -1,0 +1,44 @@
+# `field-mobile` — a Whisker app. See README.md for usage.
+#
+# Single-crate workspace: the same `Cargo.toml` carries `[package]`
+# for cargo's package resolution and `[workspace]` so `whisker run`
+# can find a workspace root. Add sibling crates by listing them in
+# `workspace.members`.
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "field-mobile"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["rlib"]
+
+[[bin]]
+name = "whisker-config"
+path = "whisker.rs"
+required-features = ["whisker-config"]
+test = false
+bench = false
+
+[features]
+whisker-config = ["whisker-cng/generate"]
+
+[dependencies]
+field-glass = { path = "glass" }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+futures-channel = "0.3"
+futures-util = "0.3"
+ureq = { version = "2", features = ["json"] }
+whisker = "0.18"
+whisker-cng = { version = "0.18.0", default-features = false }
+whisker-input = "0.14.6"
+whisker-safe-area = "0.14.6"
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+security-framework = "3"

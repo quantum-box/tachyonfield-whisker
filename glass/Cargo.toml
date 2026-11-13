@@ -1,0 +1,18 @@
+[package]
+name = "field-glass"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "iOS の本物のガラス（Liquid Glass）と標準タブバーを Whisker の部品として出す。"
+
+[lib]
+crate-type = ["rlib"]
+
+# Whisker の部品（モジュール）だという印。whisker-build がこれを見て、
+# iOS ビルドに Swift のパッケージを組み込む。
+[package.metadata.whisker.module.platforms]
+ios = { manifest = "Package.swift" }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+whisker = "0.18"
