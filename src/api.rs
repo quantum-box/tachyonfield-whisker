@@ -218,24 +218,48 @@ pub fn list_tenants(token: &str) -> Result<Vec<Tenant>, String> {
 
 /// 機能の一覧を取る。応答の `list_key`（`items` など）に入った配列を返す。
 /// 配列がそのまま返る API にも対応する。
+///
+/// 応答に `hasMore: true` があれば `offset` を進めて続きも読み、全部をつなげて返す
+/// （画面の検索は手元の行で絞り込むので、読み残すと見つからなくなる）。
+/// 読みすぎを防ぐため `MAX_PAGES` ページで止める。
 pub fn fetch_list(
     token: &str,
     tenant: &Tenant,
     path: &str,
     list_key: &str,
 ) -> Result<Vec<Value>, String> {
-    let body: Value = field_request("GET", path, token, &tenant.id, &tenant.platform_id)
-        .call()
-        .map_err(describe_error)?
-        .into_json()
-        .map_err(|e| format!("応答を読めません: {e}"))?;
-    let list = match body {
-        Value::Array(items) => items,
-        mut body => match body[list_key].take() {
-            Value::Array(items) => items,
-            _ => return Err("応答の形が想定と違います".into()),
-        },
-    };
+    const MAX_PAGES: usize = 20;
+    let mut list = Vec::new();
+    for _ in 0..MAX_PAGES {
+        let page_path = if list.is_empty() {
+            path.to_owned()
+        } else {
+            let joiner = if path.contains('?') { '&' } else { '?' };
+            format!("{path}{joiner}offset={}", list.len())
+        };
+        let body: Value = field_request("GET", &page_path, token, &tenant.id, &tenant.platform_id)
+            .call()
+            .map_err(describe_error)?
+            .into_json()
+            .map_err(|e| format!("応答を読めません: {e}"))?;
+        let (items, has_more) = match body {
+            Value::Array(items) => (items, false),
+            mut body => {
+                let has_more = body["hasMore"]
+                    .as_bool()
+                    .or_else(|| body["has_more"].as_bool());
+                match body[list_key].take() {
+                    Value::Array(items) => (items, has_more.unwrap_or(false)),
+                    _ => return Err("応答の形が想定と違います".into()),
+                }
+            }
+        };
+        let got = items.len();
+        list.extend(items);
+        if !has_more || got == 0 {
+            break;
+        }
+    }
     Ok(list)
 }
 
@@ -255,6 +279,8 @@ pub enum AgentEvent {
     Completion(String),
     /// 途中で失敗した。
     Failed(String),
+    /// アクセストークンを取り直した。画面側はこれを覚えておく。
+    Renewed(String),
 }
 
 /// Field Agent の会話を 1 つ作り、その ID（`as_…`）を返す。

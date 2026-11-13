@@ -277,6 +277,10 @@ pub fn agent_screen(
                     .await
                     {
                         Ok(id) => {
+                            // 止めたあとに届いた会話 ID で、次の会話の ID を上書きしない。
+                            if cancel.load(Ordering::Relaxed) {
+                                return;
+                            }
                             chat.session.set(Some(id.clone()));
                             id
                         }
@@ -299,10 +303,33 @@ pub fn agent_screen(
             let access = token.get_untracked().unwrap_or_default();
             let flag = cancel.clone();
             std::thread::spawn(move || {
-                let result =
+                let mut result =
                     api::agent_stream(&access, &current, &session, &task, &flag, |event| {
                         let _ = sender.unbounded_send(event);
                     });
+                // トークンが切れていたら取り直して 1 回だけ送り直す。期限切れは送った直後
+                // （まだ何も流れていない時）に返るので、同じ頼みを二重に流すことはない。
+                if matches!(&result, Err(e) if e == api::EXPIRED) {
+                    if let Some(refresh_token) = storage::refresh_token() {
+                        if let Ok(renewed) = api::refresh(&refresh_token) {
+                            if let Some(rotated) = &renewed.refresh_token {
+                                storage::save_refresh_token(rotated);
+                            }
+                            let _ = sender
+                                .unbounded_send(AgentEvent::Renewed(renewed.access_token.clone()));
+                            result = api::agent_stream(
+                                &renewed.access_token,
+                                &current,
+                                &session,
+                                &task,
+                                &flag,
+                                |event| {
+                                    let _ = sender.unbounded_send(event);
+                                },
+                            );
+                        }
+                    }
+                }
                 if let Err(message) = result {
                     let _ = sender.unbounded_send(AgentEvent::Failed(message));
                 }
@@ -364,6 +391,7 @@ pub fn agent_screen(
                     AgentEvent::Failed(message) => {
                         chat.push(Role::Notice, message, String::new());
                     }
+                    AgentEvent::Renewed(access) => token.set(Some(access)),
                 }
             }
             if !cancel.load(Ordering::Relaxed) {

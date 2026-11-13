@@ -75,7 +75,7 @@ pub const SALES_CONTRACTS: Feature = Feature {
 };
 pub const CUSTOMERS: Feature = Feature {
     label: "個人顧客",
-    path: "/v1/erp/customers",
+    path: "/v1/erp/customers?limit=100",
     list_key: "data",
     title: &["name"],
     subtitle: &["email", "phone"],
@@ -391,8 +391,10 @@ fn text(value: &Value) -> Option<String> {
     }
 }
 
+/// 金額を「¥1,234」「12.34 USD」の形にする。API の金額はその通貨の最小単位の整数
+/// （円なら円、ドルならセント）なので、通貨ごとの小数の桁数で割ってから出す。
 fn money(value: &Value, currency: Option<&str>) -> Option<String> {
-    let (amount, currency) = match value {
+    let (minor, currency) = match value {
         Value::Number(n) => (n.as_f64()?, currency),
         Value::String(s) => (s.trim().parse::<f64>().ok()?, currency),
         Value::Object(map) => (
@@ -402,23 +404,49 @@ fn money(value: &Value, currency: Option<&str>) -> Option<String> {
         ),
         _ => return None,
     };
-    let number = with_commas(amount);
-    Some(match currency {
-        None | Some("JPY") | Some("jpy") => format!("¥{number}"),
-        Some(code) => format!("{number} {}", code.to_uppercase()),
+    let code = currency.map(|c| c.trim().to_uppercase());
+    let digits = code.as_deref().map_or(0, minor_unit_digits);
+    let number = with_commas(minor / 10_f64.powi(digits as i32), digits);
+    Some(match code.as_deref() {
+        None | Some("JPY") => format!("¥{number}"),
+        Some(code) => format!("{number} {code}"),
     })
 }
 
-fn with_commas(amount: f64) -> String {
+/// 通貨の小数の桁数（ISO 4217。Web 版の arApCurrencyMinorUnitExponent と同じ表）。
+fn minor_unit_digits(currency: &str) -> usize {
+    const ZERO: &[&str] = &[
+        "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "UYI", "VND",
+        "VUV", "XAF", "XOF", "XPF",
+    ];
+    const THREE: &[&str] = &["BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"];
+    const FOUR: &[&str] = &["CLF", "UYW"];
+    if ZERO.contains(&currency) {
+        0
+    } else if THREE.contains(&currency) {
+        3
+    } else if FOUR.contains(&currency) {
+        4
+    } else {
+        2
+    }
+}
+
+/// 3 桁ごとにカンマを入れ、小数は `decimals` 桁で出す。
+fn with_commas(amount: f64, decimals: usize) -> String {
     let negative = amount < 0.0;
-    let whole = amount.abs().round() as u64;
-    let digits = whole.to_string();
+    let fixed = format!("{:.*}", decimals, amount.abs());
+    let (whole, fraction) = fixed.split_once('.').unwrap_or((&fixed, ""));
     let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+    for (i, c) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i) % 3 == 0 {
             out.push(',');
         }
         out.push(c);
+    }
+    if !fraction.is_empty() {
+        out.push('.');
+        out.push_str(fraction);
     }
     if negative { format!("-{out}") } else { out }
 }
@@ -540,4 +568,28 @@ pub fn status_label(raw: &str) -> String {
         _ => return raw.to_owned(),
     };
     label.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::money;
+    use serde_json::json;
+
+    #[test]
+    fn money_divides_minor_units_by_currency() {
+        assert_eq!(
+            money(&json!(1234), Some("USD")).as_deref(),
+            Some("12.34 USD")
+        );
+        assert_eq!(money(&json!(1234567), None).as_deref(), Some("¥1,234,567"));
+        assert_eq!(money(&json!(1234), Some("jpy")).as_deref(), Some("¥1,234"));
+        assert_eq!(
+            money(&json!(1500), Some("KWD")).as_deref(),
+            Some("1.500 KWD")
+        );
+        assert_eq!(
+            money(&json!({ "amount": -250, "currency": "EUR" }), None).as_deref(),
+            Some("-2.50 EUR")
+        );
+    }
 }
