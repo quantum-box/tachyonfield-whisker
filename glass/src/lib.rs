@@ -34,6 +34,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_record_list_schema::element_provider(),
             native_keyboard_observer_schema::element_provider(),
             native_sheet_schema::element_provider(),
+            native_backdrop_schema::element_provider(),
         ],
     )
 }
@@ -308,4 +309,40 @@ pub fn sheet(
         .on_select(move |e: MenuSelectEvent| on_select.run(e.detail.key))
         .on_dismiss(move || on_dismiss.run(()))
         .build()
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:Backdrop", measurement = None)]
+pub fn native_backdrop(style: Style) {}
+
+/// ログイン画面の背景。淡い色の光の玉がゆっくり漂う絵。上にガラスを重ねて使う。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn backdrop(style: Style) -> Element {
+    NativeBackdrop::builder().style(style.clone()).build()
+}
+
+/// ログイン画面の背景。iOS 以外は、淡い青から紫への色の移り変わりで代わりにする。
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn backdrop(style: Style) -> Element {
+    use whisker::css::{Color, ColorStop, Gradient, PositionKind};
+    let outer = style.clone();
+    let painted = css!(
+        position: PositionKind::Absolute,
+        top: px(0),
+        bottom: px(0),
+        left: px(0),
+        right: px(0),
+    )
+    .background_image(Gradient::linear_to_bottom([
+        ColorStop::new(Color::hex(0xD6E8FF)),
+        ColorStop::new(Color::hex(0xF4F6FB)),
+        ColorStop::new(Color::hex(0xE9DEFF)),
+    ]));
+    render! {
+        View(style: outer) {
+            View(style: painted)
+        }
+    }
 }

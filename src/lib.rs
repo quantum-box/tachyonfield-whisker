@@ -14,7 +14,7 @@ mod storage;
 use agent::AgentScreen;
 use api::Tenant;
 use features::{Feature, MENU};
-use field_glass::{Glass, KeyboardObserver};
+use field_glass::{Backdrop, Glass, KeyboardObserver};
 #[cfg(target_os = "ios")]
 use field_glass::{
     MenuList as SystemMenuList, RecordList as SystemRecordList, Sheet as SystemSheet,
@@ -237,42 +237,58 @@ fn login(token: RwSignal<Option<String>>) -> Element {
         });
     };
 
+    let insets = safe_area_insets();
+    let fill = |top: f32| {
+        css!(
+            position: PositionKind::Absolute,
+            top: px(top),
+            bottom: px(0),
+            left: px(0),
+            right: px(0),
+        )
+    };
+
     render! {
+        // 背景の絵の上に、ガラスの板で題名・入力欄を重ねる（Apple のサインイン画面の作り）。
         View(
             style: css!(
                 flex_grow: 1.0,
+                position: PositionKind::Relative,
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
-                gap: px(28),
-                padding_bottom: px(60),
+                gap: px(32),
+                padding: (px(0), px(20)),
+                padding_bottom: px(48),
             ),
         ) {
+            // 画面の上端（時計の裏）まで絵を広げる。
+            Backdrop(style: computed(move || fill(-(insets.get().top as f32))))
             View(
                 style: css!(
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
-                    gap: px(8),
+                    gap: px(6),
                 ),
             ) {
                 View(
                     style: css!(
-                        width: px(76),
-                        height: px(76),
-                        border_radius: px(18),
-                        background_color: Color::hex(0x0F172A),
+                        width: px(88),
+                        height: px(88),
+                        position: PositionKind::Relative,
                         display: Display::Flex,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
-                        margin_bottom: px(8),
+                        margin_bottom: px(14),
                     ),
                 ) {
+                    Glass(corner_radius: 22.0_f32, style: fill(0.0))
                     Text(
                         value: "TF",
                         style: css!(
-                            color: Color::hex(0xFFFFFF),
-                            font_size: px(30),
+                            color: Color::hex(0x0A2540),
+                            font_size: px(34),
                             font_weight: FontWeight::Bold,
                         ),
                     )
@@ -281,18 +297,25 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                     value: "TACHYON Field",
                     style: css!(
                         color: Color::hex(LABEL),
-                        font_size: px(28),
+                        font_size: px(34),
                         font_weight: FontWeight::Bold,
                     ),
                 )
                 Text(
                     value: "アカウントでサインイン",
-                    style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(15)),
+                    style: css!(color: Color::rgba(60, 60, 67, 0.6), font_size: px(17)),
                 )
             }
-            // iOS の入力フォーム：白い角丸の中に 2 行、間に区切り線。
-            View(style: group_style()) {
-                View(style: form_row_style().border_bottom(hairline())) {
+            // ガラスの板の上に入力欄 2 行、間に区切り線。
+            View(
+                style: css!(
+                    position: PositionKind::Relative,
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                ),
+            ) {
+                Glass(corner_radius: 20.0_f32, style: fill(0.0))
+                View(style: form_row_style().border_bottom(glass_hairline())) {
                     Input(
                         text: email,
                         placeholder: "メールアドレス",
@@ -301,7 +324,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                         autocorrect: false,
                         spell_check: false,
                         return_key: ReturnKey::Next,
-                        style: form_input_style(),
+                        style: glass_input_style(),
                     )
                 }
                 View(style: form_row_style()) {
@@ -311,7 +334,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                         secure: true,
                         return_key: ReturnKey::Go,
                         on_submit: move |_| submit(),
-                        style: form_input_style(),
+                        style: glass_input_style(),
                     )
                 }
             }
@@ -320,7 +343,6 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
                     gap: px(12),
-                    padding: (px(0), px(16)),
                 ),
             ) {
                 Show(when: move || !error.with(String::is_empty)) {
@@ -333,6 +355,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                         ),
                     )
                 }
+                // 角の丸い大きなボタン（iOS の「続ける」ボタンの形）。
                 View(
                     style: computed(move || {
                         css!(
@@ -340,8 +363,8 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                             flex_direction: FlexDirection::Row,
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
-                            height: px(50),
-                            border_radius: px(12),
+                            height: px(52),
+                            border_radius: px(26),
                             background_color: Color::hex(TINT),
                             opacity: if busy.get() { 0.5 } else { 1.0 },
                         )
@@ -2002,14 +2025,23 @@ fn form_row_style() -> Css {
     )
 }
 
-fn form_input_style() -> Css {
+/// ガラスの上の入力欄。背景は透かして、下の板の色を見せる。
+fn glass_input_style() -> Css {
     css!(
-        height: px(48),
+        height: px(52),
         font_size: px(17),
         padding_right: px(16),
-        background_color: Color::hex(CELL),
+        background_color: Color::rgba(0, 0, 0, 0.0),
         color: Color::hex(LABEL),
     )
+}
+
+/// ガラスの上の区切り線。白い板の線より薄くして、透けた色になじませる。
+fn glass_hairline() -> Border {
+    Border::new()
+        .width(px(0.5))
+        .color(Color::rgba(60, 60, 67, 0.25))
+        .style(BorderStyle::Solid)
 }
 
 /// iOS の区切り線（細い 1 本）。

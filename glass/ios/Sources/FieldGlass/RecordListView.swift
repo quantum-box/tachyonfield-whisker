@@ -17,21 +17,46 @@
 import UIKit
 import WhiskerModule
 
-/// 一覧を入れる箱。Whisker の入れ物に直接置くと UIKit の部品が中身を並べ直さないので、
-/// 大きさが決まるたびに一覧の大きさを付け直す。
+/// 一覧を入れる箱。上に検索欄を固定し、その下で一覧だけが流れる（iOS の連絡先アプリと同じ動き）。
+/// 一覧を少しでも下へ流したら、検索欄との境目に細い線を出す。
+/// Whisker の入れ物に直接置くと UIKit の部品が中身を並べ直さないので、大きさが決まるたびに付け直す。
 private final class RecordListHost: UIView {
+    let searchBar: UISearchBar = {
+        let bar = UISearchBar()
+        bar.searchBarStyle = .minimal
+        bar.autocapitalizationType = .none
+        return bar
+    }()
     let table = UITableView(frame: .zero, style: .plain)
+    let edge: UIView = {
+        let line = UIView()
+        line.backgroundColor = .separator
+        line.alpha = 0
+        return line
+    }()
+    private var observation: NSKeyValueObservation?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         addSubview(table)
+        addSubview(searchBar)
+        addSubview(edge)
+        observation = table.observe(\.contentOffset, options: [.new]) { [weak self] table, _ in
+            let scrolled = table.contentOffset.y + table.adjustedContentInset.top > 1
+            let alpha: CGFloat = scrolled ? 1 : 0
+            guard let self, self.edge.alpha != alpha else { return }
+            UIView.animate(withDuration: 0.15) { self.edge.alpha = alpha }
+        }
     }
 
     required init?(coder: NSCoder) { nil }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        table.frame = bounds
+        let barHeight = searchBar.sizeThatFits(bounds.size).height
+        searchBar.frame = CGRect(x: 0, y: 0, width: bounds.width, height: barHeight)
+        edge.frame = CGRect(x: 0, y: barHeight, width: bounds.width, height: 1 / max(traitCollection.displayScale, 1))
+        table.frame = CGRect(x: 0, y: barHeight, width: bounds.width, height: max(bounds.height - barHeight, 0))
         if let header = table.tableHeaderView, header.frame.width != bounds.width {
             header.frame.size.width = bounds.width
             table.tableHeaderView = header
@@ -54,12 +79,26 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
     private var rows: [RecordRow] = []
     private var header: String = ""
 
-    private let searchBar: UISearchBar = {
-        let bar = UISearchBar()
-        bar.searchBarStyle = .minimal
-        bar.autocapitalizationType = .none
-        bar.sizeToFit()
-        return bar
+    private var searchBar: UISearchBar { host.searchBar }
+
+    /// 件数（「6 件」）。一覧の先頭に置き、一覧と一緒に流れる（上に貼り付かない）。
+    private let countLabel: UILabel = {
+        let label = UILabel()
+        label.font = .preferredFont(forTextStyle: .footnote)
+        label.textColor = .secondaryLabel
+        return label
+    }()
+
+    private lazy var countHeader: UIView = {
+        let view = UIView(frame: CGRect(x: 0, y: 0, width: 320, height: 32))
+        countLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(countLabel)
+        NSLayoutConstraint.activate([
+            countLabel.leadingAnchor.constraint(equalTo: view.layoutMarginsGuide.leadingAnchor),
+            countLabel.trailingAnchor.constraint(equalTo: view.layoutMarginsGuide.trailingAnchor),
+            countLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
+        ])
+        return view
     }()
 
     private let messageLabel: UILabel = {
@@ -79,9 +118,8 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
         table.dataSource = self
         table.delegate = self
         table.keyboardDismissMode = .onDrag
-        table.tableHeaderView = searchBar
         table.refreshControl = refresh
-        searchBar.delegate = self
+        host.searchBar.delegate = self
         refresh.addTarget(self, action: #selector(didPullToRefresh), for: .valueChanged)
         return host
     }()
@@ -96,11 +134,23 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
         rows = Self.parse(json)
         host.table.reloadData()
         updateBackground()
+        updateCount()
     }
 
     func setHeader(_ text: String) {
         header = text
-        host.table.reloadData()
+        updateCount()
+    }
+
+    private func updateCount() {
+        let show = !rows.isEmpty && !header.isEmpty
+        countLabel.text = header
+        if show, host.table.tableHeaderView !== countHeader {
+            countHeader.frame.size.width = host.table.bounds.width
+            host.table.tableHeaderView = countHeader
+        } else if !show, host.table.tableHeaderView != nil {
+            host.table.tableHeaderView = nil
+        }
     }
 
     func setMessage(_ text: String) {
@@ -130,10 +180,6 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
 
     public func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         rows.count
-    }
-
-    public func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        rows.isEmpty || header.isEmpty ? nil : header
     }
 
     public func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
