@@ -317,6 +317,10 @@ pub fn agent_screen(
                             }
                             let _ = sender
                                 .unbounded_send(AgentEvent::Renewed(renewed.access_token.clone()));
+                            // 取り直している間に止められていたら、送り直さない。
+                            if flag.load(Ordering::Relaxed) {
+                                return;
+                            }
                             result = api::agent_stream(
                                 &renewed.access_token,
                                 &current,

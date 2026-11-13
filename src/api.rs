@@ -67,7 +67,7 @@ fn cognito(target: &str, body: Value) -> Result<Value, String> {
             let value: Value = response.into_json().unwrap_or(Value::Null);
             let kind = value["__type"].as_str().unwrap_or_default();
             Err(match kind {
-                "NotAuthorizedException" => "メールアドレスかパスワードが違います".into(),
+                "NotAuthorizedException" => REJECTED.into(),
                 "UserNotFoundException" => "このアカウントは見つかりません".into(),
                 "UserNotConfirmedException" => "アカウントの確認が終わっていません".into(),
                 _ => value["message"]
@@ -111,16 +111,29 @@ pub fn sign_in(username: &str, password: &str) -> Result<Session, String> {
 
 /// 保存しておいたリフレッシュトークンで、新しいアクセストークンを取る。
 pub fn refresh(refresh_token: &str) -> Result<Session, String> {
-    session_from(cognito(
-        "InitiateAuth",
-        json!({
-            "AuthFlow": "REFRESH_TOKEN_AUTH",
-            "ClientId": COGNITO_CLIENT_ID,
-            "AuthParameters": { "REFRESH_TOKEN": refresh_token },
-        }),
-    )?)
+    session_from(
+        cognito(
+            "InitiateAuth",
+            json!({
+                "AuthFlow": "REFRESH_TOKEN_AUTH",
+                "ClientId": COGNITO_CLIENT_ID,
+                "AuthParameters": { "REFRESH_TOKEN": refresh_token },
+            }),
+        )
+        .map_err(|error| {
+            // 断られた（期限切れ・取り消し済み）ときだけ EXPIRED。通信の失敗はそのまま返す。
+            if error == REJECTED {
+                EXPIRED.to_owned()
+            } else {
+                error
+            }
+        })?,
+    )
     .map_err(|_| EXPIRED.to_owned())
 }
+
+/// Cognito がトークンやパスワードを受け付けなかったときの文言（`cognito` が返す）。
+const REJECTED: &str = "メールアドレスかパスワードが違います";
 
 /// サインアウト時に、リフレッシュトークンを Cognito 側でも使えなくする。
 pub fn revoke(refresh_token: &str) {
@@ -263,6 +276,61 @@ pub fn fetch_list(
     Ok(list)
 }
 
+/// 案件のパイプラインと段階は ID（`pl_…` / `ps_…`）で届くので、名前に置き換える。
+/// パイプラインの定義が読めないときや、見つからない ID は画面に出さない（ID は見せない）。
+pub fn resolve_pipelines(token: &str, tenant: &Tenant, deals: &mut [Value]) {
+    let mut names = std::collections::HashMap::new();
+    if let Ok(body) = field_request(
+        "GET",
+        "/v1/erp/pipelines",
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .call()
+    .map_err(describe_error)
+    .and_then(|r| r.into_json::<Value>().map_err(|e| e.to_string()))
+    {
+        for pipeline in body["items"].as_array().into_iter().flatten() {
+            if let (Some(id), Some(label)) = (pipeline["id"].as_str(), pipeline["label"].as_str()) {
+                names.insert(id.to_owned(), label.to_owned());
+            }
+            for stage in pipeline["stages"].as_array().into_iter().flatten() {
+                if let (Some(id), Some(label)) = (stage["id"].as_str(), stage["label"].as_str()) {
+                    names.insert(id.to_owned(), label.to_owned());
+                }
+            }
+        }
+    }
+    for deal in deals.iter_mut() {
+        for key in ["pipeline", "stage", "pipelineId", "stageId"] {
+            let Some(id) = deal[key].as_str().map(str::to_owned) else {
+                continue;
+            };
+            if !(id.starts_with("pl_") || id.starts_with("ps_")) {
+                continue;
+            }
+            let target = match key {
+                "pipelineId" => "pipeline",
+                "stageId" => "stage",
+                other => other,
+            };
+            deal[target] = names
+                .get(&id)
+                .map_or(Value::Null, |name| Value::String(name.clone()));
+        }
+    }
+}
+
+/// 1 件を取り直す（一覧の応答には入っていない項目を詳細で出すため）。
+pub fn fetch_record(token: &str, tenant: &Tenant, path: &str) -> Result<Value, String> {
+    field_request("GET", path, token, &tenant.id, &tenant.platform_id)
+        .call()
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
 /// Field Agent の execute だけを流す Worker。本番 API は応答をため込む（Lambda）ので、
 /// Web 版（apps/client/src/api/field-stream-url.ts）と同じくこちらへ送る。
 const AGENT_STREAM_BASE_URL: &str = "https://field-agent-stream.txcloud.app";
@@ -315,6 +383,11 @@ pub fn agent_stream(
 ) -> Result<(), String> {
     use std::io::BufRead;
     use std::sync::atomic::Ordering;
+
+    // 止められた頼みは、サーバーへ送らない（送ると操作が実行されてしまう）。
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(());
+    }
 
     let response = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))

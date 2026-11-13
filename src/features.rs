@@ -23,6 +23,8 @@ pub struct Feature {
     pub avatar: bool,
     /// メニューの四角いアイコンの色。
     pub color: u32,
+    /// 一覧の応答に無い項目があるとき、1 件を取り直すパス（`{id}` を置き換える）。
+    pub detail_path: Option<&'static str>,
 }
 
 const BLUE: u32 = 0x007AFF;
@@ -42,6 +44,7 @@ pub const DEALS: Feature = Feature {
     trailing: Some("stage"),
     avatar: false,
     color: BLUE,
+    detail_path: None,
 };
 pub const QUOTATIONS: Feature = Feature {
     label: "見積",
@@ -52,6 +55,7 @@ pub const QUOTATIONS: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: BLUE,
+    detail_path: None,
 };
 pub const ORDERS: Feature = Feature {
     label: "受注",
@@ -62,6 +66,7 @@ pub const ORDERS: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: BLUE,
+    detail_path: None,
 };
 pub const SALES_CONTRACTS: Feature = Feature {
     label: "販売契約",
@@ -72,6 +77,8 @@ pub const SALES_CONTRACTS: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: BLUE,
+    // 一覧は軽い形で、備考と明細は入っていない。
+    detail_path: Some("/v1/erp/sales-contracts/{id}"),
 };
 pub const CUSTOMERS: Feature = Feature {
     label: "個人顧客",
@@ -82,6 +89,7 @@ pub const CUSTOMERS: Feature = Feature {
     trailing: None,
     avatar: true,
     color: GREEN,
+    detail_path: None,
 };
 pub const CLIENTS: Feature = Feature {
     label: "取引先",
@@ -92,6 +100,7 @@ pub const CLIENTS: Feature = Feature {
     trailing: None,
     avatar: true,
     color: GREEN,
+    detail_path: None,
 };
 pub const INQUIRIES: Feature = Feature {
     label: "お問い合わせ",
@@ -102,6 +111,7 @@ pub const INQUIRIES: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: GREEN,
+    detail_path: None,
 };
 pub const RESERVATIONS: Feature = Feature {
     label: "予約",
@@ -112,6 +122,7 @@ pub const RESERVATIONS: Feature = Feature {
     trailing: Some("status"),
     avatar: true,
     color: ORANGE,
+    detail_path: None,
 };
 pub const STAFF: Feature = Feature {
     label: "スタッフ",
@@ -122,6 +133,7 @@ pub const STAFF: Feature = Feature {
     trailing: None,
     avatar: true,
     color: PURPLE,
+    detail_path: None,
 };
 pub const PRODUCTS: Feature = Feature {
     label: "商品",
@@ -132,6 +144,7 @@ pub const PRODUCTS: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: TEAL,
+    detail_path: None,
 };
 pub const PURCHASE_ORDERS: Feature = Feature {
     label: "発注書",
@@ -142,6 +155,7 @@ pub const PURCHASE_ORDERS: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: TEAL,
+    detail_path: None,
 };
 pub const INVOICES: Feature = Feature {
     label: "請求書",
@@ -152,6 +166,7 @@ pub const INVOICES: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: INDIGO,
+    detail_path: None,
 };
 pub const EXPENSES: Feature = Feature {
     label: "経費",
@@ -162,6 +177,7 @@ pub const EXPENSES: Feature = Feature {
     trailing: Some("status"),
     avatar: false,
     color: RED,
+    detail_path: None,
 };
 
 /// メニュー画面のグループ。Web 版のメニューと同じ並び。
@@ -331,7 +347,12 @@ pub fn line_rows(item: &Value) -> Vec<(String, String)> {
                 .iter()
                 .find_map(|k| text(&line[*k]))
                 .unwrap_or_else(|| "明細".into());
-            let quantity = line["quantity"].as_f64().filter(|q| *q != 1.0);
+            // 請求書の明細は小数の数量を quantityDecimal に持つ（quantity は整数に切り捨て）。
+            let quantity = line["quantityDecimal"]
+                .as_str()
+                .and_then(|q| q.trim().parse::<f64>().ok())
+                .or_else(|| line["quantity"].as_f64())
+                .filter(|q| *q != 1.0);
             let label = match quantity {
                 Some(q) => format!("{name} × {}", trim_number(q)),
                 None => name,
@@ -572,8 +593,18 @@ pub fn status_label(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::money;
+    use super::{line_rows, money};
     use serde_json::json;
+
+    #[test]
+    fn line_quantity_prefers_the_precise_decimal() {
+        let item = json!({ "lineItems": [
+            { "name": "作業", "quantity": 0, "quantityDecimal": "0.5", "amount": 500 },
+            { "name": "部品", "quantity": 3, "amount": 900 },
+        ]});
+        let labels: Vec<String> = line_rows(&item).into_iter().map(|row| row.0).collect();
+        assert_eq!(labels, vec!["作業 × 0.5".to_owned(), "部品 × 3".to_owned()]);
+    }
 
     #[test]
     fn money_divides_minor_units_by_currency() {
