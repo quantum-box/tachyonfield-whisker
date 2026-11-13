@@ -1,0 +1,57 @@
+# Builds the iOS app and uploads it to TestFlight.
+#
+# Needs, once:
+# - `credentials/` committed: run `whisker credential ios` locally (App Store
+#   Connect API key wizard). It stores the key age-encrypted in the repo.
+# - Repository secret `WHISKER_CREDENTIALS_KEY`: the `AGE-SECRET-KEY-1…`
+#   shown when the credentials store was created.
+name: TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    name: Build and upload
+    # Xcode 26 is needed for Liquid Glass (UIGlassEffect).
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      # TestFlight needs a new build number for every upload.
+      BUILD_NUMBER: ${{ github.run_number }}
+      WHISKER_CREDENTIALS_KEY: ${{ secrets.WHISKER_CREDENTIALS_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Whisker CLI
+        run: cargo install whisker-cli --version 0.18.0 --locked
+
+      - name: Check credentials
+        run: |
+          test -n "$WHISKER_CREDENTIALS_KEY" || { echo "::error::Secret WHISKER_CREDENTIALS_KEY is not set"; exit 1; }
+          test -f credentials/recipients.txt || { echo "::error::credentials/ is missing; run 'whisker credential ios' locally and commit it"; exit 1; }
+
+      - name: Build .ipa
+        run: whisker build ipa --no-tui
+
+      - name: Upload to TestFlight
+        run: whisker submit ios --no-tui
