@@ -1,3 +1,5 @@
+use whisker_cng::AppIcon;
+
 fn main() {
     // CI sets BUILD_NUMBER (the workflow run number) so every TestFlight
     // upload gets a new build number. Local builds use 1.
@@ -11,6 +13,11 @@ fn main() {
             .background("#FFFFFF")
             .version("0.2.0")
             .build_number(build_number);
+
+        // App Store needs an icon; actool derives every size from this 1024×1024 PNG.
+        app.plugin::<AppIcon>(|c| {
+            c.source("assets/icon.png");
+        });
 
         app.android(|a| {
             a.package("app.txcloud.tachyonfield.whisker")
