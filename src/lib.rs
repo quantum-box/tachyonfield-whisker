@@ -491,6 +491,10 @@ struct BackSwipe {
 
 /// これより右へ引いて離したら戻る。足りなければ元の位置に戻す。
 const BACK_DISTANCE: f32 = 90.0;
+/// 詳細を出している間、後ろの一覧を左へ寄せておく幅。
+const BEHIND_SHIFT: f32 = 90.0;
+/// 詳細をこれだけ右へ引くと、後ろの一覧が元の位置まで戻りきる。
+const BEHIND_TRAVEL: f32 = 320.0;
 
 /// 裏のメニューの幅。表の画面はこの分だけ右にずれる。
 const DRAWER_WIDTH: f32 = 300.0;
@@ -1242,14 +1246,43 @@ fn feature_list(
     let refreshing = signal(false);
     load_list(token, tenant, feature, items, loading, error, refreshing);
 
+    // 詳細は一覧の上に重ねて出す。一覧は消さずに後ろに残すので、
+    // 詳細を右へ引くと、下から一覧が見えてくる（戻ったときもスクロール位置のまま）。
+    // 詳細を出している間の一覧は、すこし左に寄せて暗くしておき、
+    // 引いた幅に合わせて元の位置・明るさへ戻す。
+    let back = use_context::<BackSwipe>();
+    let dragging = computed(move || back.is_some_and(|b| b.drag.get().is_some()));
+    let behind = computed(move || {
+        if selected.with(Option::is_none) {
+            return None;
+        }
+        let dx = back.and_then(|b| b.drag.get()).unwrap_or(0.0);
+        Some((dx / BEHIND_TRAVEL).clamp(0.0, 1.0))
+    });
+    let ease = || {
+        Transition::new(TransitionPropertyKind::name("transform"))
+            .duration(ms(220))
+            .timing(EasingFunction::EaseOut)
+    };
+
     render! {
-        Show(
-            when: move || selected.with(Option::is_none),
-            fallback: move || render! {
-                ItemDetail(token: token, tenant: tenant, feature: feature, selected: selected)
-            },
+        View(
+            style: css!(
+                position: PositionKind::Relative,
+                flex_grow: 1.0,
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+            )
+            .flex_basis(px(0))
+            .min_height(px(0)),
         ) {
-            View(style: screen_style()) {
+            View(
+                style: computed(move || {
+                    let x = behind.get().map_or(0.0, |p| -BEHIND_SHIFT * (1.0 - p));
+                    let s = screen_style().transform(TransformFn::TranslateX(px(x).into()));
+                    if dragging.get() { s } else { s.transition(ease()) }
+                }),
+            ) {
                 NavBar(
                     title: feature.label,
                     back_label: back_label,
@@ -1270,6 +1303,36 @@ fn feature_list(
                         load_list(token, tenant, feature, items, loading, error, refreshing);
                     },
                 )
+            }
+            Show(when: move || behind.get().is_some()) {
+                View(
+                    style: computed(move || {
+                        let p = behind.get().unwrap_or(1.0);
+                        css!(
+                            position: PositionKind::Absolute,
+                            top: px(0),
+                            bottom: px(0),
+                            left: px(0),
+                            right: px(0),
+                        )
+                        .background_color(Color::rgba(0, 0, 0, 0.12 * (1.0 - p)))
+                    }),
+                )
+            }
+            Show(when: move || selected.with(Option::is_some)) {
+                View(
+                    style: css!(
+                        position: PositionKind::Absolute,
+                        top: px(0),
+                        bottom: px(0),
+                        left: px(0),
+                        right: px(0),
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Column,
+                    ),
+                ) {
+                    ItemDetail(token: token, tenant: tenant, feature: feature, selected: selected)
+                }
             }
         }
     }
