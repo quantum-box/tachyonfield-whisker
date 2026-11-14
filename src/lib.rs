@@ -857,6 +857,16 @@ const SIGN_OUT_KEY: &str = "__sign_out";
 #[cfg(target_os = "ios")]
 const TENANT_KEY: &str = "__tenant";
 
+/// このアプリのバージョン。TestFlight に上げるときは 0.2.<アップロードの番号>（whisker.rs と同じ決め方）。
+/// 手元で動かしているときは「0.2.0（手元）」。
+#[cfg(target_os = "ios")]
+fn app_version() -> String {
+    match option_env!("BUILD_NUMBER") {
+        Some(n) => format!("0.2.{n}"),
+        None => "0.2.0（手元）".to_owned(),
+    }
+}
+
 /// 設定のシートで今見せている中身。
 #[cfg(target_os = "ios")]
 #[derive(Clone, Copy, PartialEq)]
@@ -922,6 +932,11 @@ fn drawer_items(
                 "color": "#8E8E93",
             }] },
             { "title": "", "rows": [{ "key": SIGN_OUT_KEY, "title": "サインアウト", "destructive": true }] },
+            { "title": "このアプリ", "rows": [{
+                "key": "__version",
+                "title": format!("バージョン {}", app_version()),
+                "accessory": "none",
+            }] },
         ])
         .to_string()
     });
