@@ -14,7 +14,7 @@ mod storage;
 use agent::AgentScreen;
 use api::Tenant;
 use features::{Feature, MENU};
-use field_glass::{Backdrop, Glass, KeyboardObserver};
+use field_glass::{AppearanceObserver, Backdrop, Glass, KeyboardObserver};
 #[cfg(target_os = "ios")]
 use field_glass::{
     MenuList as SystemMenuList, RecordList as SystemRecordList, Sheet as SystemSheet,
@@ -32,10 +32,10 @@ use whisker::runtime::view::Element;
 use whisker_input::{AutoCapitalize, Input, InputRef, KeyboardType, ReturnKey};
 use whisker_safe_area::safe_area_insets;
 
-// iOS のシステムカラー（ライトモード）。
+// iOS のシステムカラー。ここには明るい表示（ライト）の色を書き、
+// 暗い表示（ダーク）の色は `dark_of` で対応させる。色は必ず `hex()` を通して使う。
 const SYSTEM_BACKGROUND: u32 = 0xFFFFFF; // 画面の背景（白）
 const DRAWER_BACKGROUND: u32 = 0xF2F2F7; // 裏のメニューの背景（表の白と見分ける）
-const CELL: u32 = 0xFFFFFF;
 const LABEL: u32 = 0x000000;
 const SECONDARY_LABEL: u32 = 0x8A8A8E;
 const SEPARATOR: u32 = 0xC6C6C8;
@@ -46,13 +46,84 @@ const AVATAR: u32 = 0xA2A6B0;
 const RED: u32 = 0xFF3B30;
 const GREEN: u32 = 0x248A3D;
 const ORANGE: u32 = 0xC93400;
+const LOGO: u32 = 0x0A2540; // サインイン画面の「TF」
+const DISABLED: u32 = 0xE5E5EA; // 押せないボタンの丸
+
+/// 今、暗い表示（ダークモード）か。iPhone の設定が変わると `app` が書き換える。
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn is_dark() -> bool {
+    DARK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 明るい表示の色を渡すと、今の表示（明るい・暗い）に合う色を返す。
+/// 対応のない色（機能ごとのアイコンの色など）は、どちらでもそのまま使う。
+fn hex(light: u32) -> Color {
+    Color::hex(if is_dark() { dark_of(light) } else { light })
+}
+
+/// iOS のダークモードの色。
+fn dark_of(light: u32) -> u32 {
+    match light {
+        SYSTEM_BACKGROUND => 0x000000,
+        DRAWER_BACKGROUND => 0x000000,
+        LABEL => 0xFFFFFF,
+        SECONDARY_LABEL => 0x8D8D93,
+        SEPARATOR => 0x38383A,
+        CHEVRON => 0x5A5A5E,
+        TINT => 0x0A84FF,
+        FILL => 0x1C1C1E,
+        AVATAR => 0x636366,
+        RED => 0xFF453A,
+        GREEN => 0x30D158,
+        ORANGE => 0xFF9F0A,
+        LOGO => 0xFFFFFF,
+        DISABLED => 0x3A3A3C,
+        other => other,
+    }
+}
+
+/// 白い板（設定画面のような、角の丸いまとまり）の色。暗い表示では黒地に浮くよう濃い灰色。
+fn cell_color() -> Color {
+    hex(if is_dark() { 0x1C1C1E } else { 0xFFFFFF })
+}
+
+/// 入力欄の「例」の文字や、補足の文字の色（少し透けた灰色）。
+fn placeholder_color() -> Color {
+    if is_dark() {
+        Color::rgba(235, 235, 245, 0.6)
+    } else {
+        Color::rgba(60, 60, 67, 0.6)
+    }
+}
 
 /// タブの下に隠れないよう、一覧の最後にあける高さ。
 const TAB_BAR_SPACE: f32 = 110.0;
 
 #[whisker::main]
 fn app() -> Element {
-    render! { Root }
+    // 明るい・暗いが分かってから画面を作る（起動直後に白く光らないように）。
+    // iPhone の設定が切り替わったら、新しい色で画面を作り直す。
+    let dark = signal(None::<bool>);
+    render! {
+        View(
+            style: css!(flex_grow: 1.0, display: Display::Flex, flex_direction: FlexDirection::Column)
+                .flex_basis(px(0))
+                .min_height(px(0)),
+        ) {
+            AppearanceObserver(on_change: move |value: bool| {
+                if dark.get_untracked() != Some(value) {
+                    DARK.store(value, std::sync::atomic::Ordering::Relaxed);
+                    dark.set(Some(value));
+                }
+            })
+            ForEach(
+                each: move || dark.get().into_iter().collect::<Vec<_>>(),
+                key: |d: &bool| *d,
+                children: move |_: ReadSignal<bool>| render! { Root },
+            )
+        }
+    }
 }
 
 /// ログイン状態と選んだテナントを持つ。画面はこの 2 つで決まる。
@@ -99,7 +170,7 @@ fn root() -> Element {
                     flex_grow: 1.0,
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
-                    background_color: Color::hex(SYSTEM_BACKGROUND),
+                    background_color: hex(SYSTEM_BACKGROUND),
                     padding_top: px(insets.get().top as f32),
                 )
                 .flex_basis(px(0))
@@ -165,12 +236,12 @@ fn restore_failed(
         ) {
             Text(
                 value: "サインインを確かめられませんでした",
-                style: css!(color: Color::hex(LABEL), font_size: px(20), font_weight: FontWeight::Bold),
+                style: css!(color: hex(LABEL), font_size: px(20), font_weight: FontWeight::Bold),
             )
             Text(
                 value: message,
                 style: css!(
-                    color: Color::hex(SECONDARY_LABEL),
+                    color: hex(SECONDARY_LABEL),
                     font_size: px(15),
                     text_align: TextAlign::Center,
                 ),
@@ -179,7 +250,7 @@ fn restore_failed(
                 style: css!(
                     padding: (px(12), px(28)),
                     border_radius: px(22),
-                    background_color: Color::hex(TINT),
+                    background_color: hex(TINT),
                 ),
                 on_tap: move |_| on_retry.run(()),
             ) {
@@ -194,7 +265,7 @@ fn restore_failed(
             }
             Text(
                 value: "サインインし直す",
-                style: css!(color: Color::hex(TINT), font_size: px(15)),
+                style: css!(color: hex(TINT), font_size: px(15)),
                 on_tap: move |_| on_sign_in.run(()),
             )
         }
@@ -287,7 +358,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                     Text(
                         value: "TF",
                         style: css!(
-                            color: Color::hex(0x0A2540),
+                            color: hex(LOGO),
                             font_size: px(34),
                             font_weight: FontWeight::Bold,
                         ),
@@ -296,14 +367,14 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                 Text(
                     value: "TACHYON Field",
                     style: css!(
-                        color: Color::hex(LABEL),
+                        color: hex(LABEL),
                         font_size: px(34),
                         font_weight: FontWeight::Bold,
                     ),
                 )
                 Text(
                     value: "アカウントでサインイン",
-                    style: css!(color: Color::rgba(60, 60, 67, 0.6), font_size: px(17)),
+                    style: css!(color: placeholder_color(), font_size: px(17)),
                 )
             }
             // ガラスの板の上に入力欄 2 行、間に区切り線。
@@ -349,7 +420,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                     Text(
                         value: computed(move || error.get()),
                         style: css!(
-                            color: Color::hex(RED),
+                            color: hex(RED),
                             font_size: px(13),
                             text_align: TextAlign::Center,
                         ),
@@ -365,7 +436,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                             align_items: AlignItems::Center,
                             height: px(52),
                             border_radius: px(26),
-                            background_color: Color::hex(TINT),
+                            background_color: hex(TINT),
                             opacity: if busy.get() { 0.5 } else { 1.0 },
                         )
                     }),
@@ -589,7 +660,7 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                         right: px(0),
                         display: Display::Flex,
                         flex_direction: FlexDirection::Column,
-                        background_color: Color::hex(SYSTEM_BACKGROUND),
+                        background_color: hex(SYSTEM_BACKGROUND),
                     )
                     .transform(TransformFn::TranslateX(px(x).into()))
                     .box_shadow(px(0), px(0), px(24), px(0), Color::rgba(0, 0, 0, shadow))
@@ -709,7 +780,7 @@ fn side_menu(
                     width: px(DRAWER_WIDTH),
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
-                    background_color: Color::hex(DRAWER_BACKGROUND),
+                    background_color: hex(DRAWER_BACKGROUND),
                 )
                 .z_index(1)
             }),
@@ -948,7 +1019,7 @@ fn drawer_items(
                             value: computed(move || tenant_name.get()),
                             max_lines: 1u32,
                             style: css!(
-                                color: Color::hex(LABEL),
+                                color: hex(LABEL),
                                 font_size: px(20),
                                 font_weight: FontWeight::Bold,
                             )
@@ -956,7 +1027,7 @@ fn drawer_items(
                         )
                         Text(
                             value: computed(move || format!("{} · タップで会社を切り替え", environment.get())),
-                            style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(13)),
+                            style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)),
                         )
                     }
                 }
@@ -991,7 +1062,7 @@ fn drawer_items(
                     ) {
                         Text(
                             value: "サインアウト",
-                            style: css!(color: Color::hex(RED), font_size: px(17)),
+                            style: css!(color: hex(RED), font_size: px(17)),
                         )
                     }
                 }
@@ -1119,7 +1190,7 @@ fn tab_bar(area: RwSignal<usize>, page: RwSignal<Page>) -> Element {
                                     justify_content: JustifyContent::Center,
                                     border_radius: px(24),
                                     background_color: if active {
-                                        Color::rgba(0, 0, 0, 0.07)
+                                        if is_dark() { Color::rgba(255, 255, 255, 0.12) } else { Color::rgba(0, 0, 0, 0.07) }
                                     } else {
                                         Color::rgba(0, 0, 0, 0.0)
                                     },
@@ -1132,7 +1203,7 @@ fn tab_bar(area: RwSignal<usize>, page: RwSignal<Page>) -> Element {
                                 style: computed(move || {
                                     let active = tab_for_page(area.get(), page.get()) == i;
                                     css!(
-                                        color: Color::hex(if active { TINT } else { LABEL }),
+                                        color: hex(if active { TINT } else { LABEL }),
                                         font_size: px(13),
                                         font_weight: FontWeight::Numeric(if active { 600 } else { 500 }),
                                     )
@@ -1166,7 +1237,7 @@ fn menu_row(label: &'static str, color: u32, separator: bool, on_tap: Callback<(
                     width: px(30),
                     height: px(30),
                     border_radius: px(7),
-                    background_color: Color::hex(color),
+                    background_color: hex(color),
                     display: Display::Flex,
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
@@ -1200,9 +1271,9 @@ fn menu_row(label: &'static str, color: u32, separator: bool, on_tap: Callback<(
             ) {
                 Text(
                     value: label,
-                    style: css!(color: Color::hex(LABEL), font_size: px(17), flex_grow: 1.0),
+                    style: css!(color: hex(LABEL), font_size: px(17), flex_grow: 1.0),
                 )
-                Text(value: "›", style: css!(color: Color::hex(CHEVRON), font_size: px(26)))
+                Text(value: "›", style: css!(color: hex(CHEVRON), font_size: px(26)))
             }
         }
     }
@@ -1478,8 +1549,8 @@ fn list_body(
                             font_size: px(17),
                             padding: (px(0), px(10)),
                             border_radius: px(10),
-                            background_color: Color::hex(FILL),
-                            color: Color::hex(LABEL),
+                            background_color: hex(FILL),
+                            color: hex(LABEL),
                         ),
                     )
                 }
@@ -1579,7 +1650,7 @@ fn item_detail(
                 let x = dx.unwrap_or(0.0);
                 let shadow = if x > 0.0 { 0.18 } else { 0.0 };
                 let s = screen_style()
-                    .background_color(Color::hex(SYSTEM_BACKGROUND))
+                    .background_color(hex(SYSTEM_BACKGROUND))
                     .transform(TransformFn::TranslateX(px(x).into()))
                     .box_shadow(px(0), px(0), px(24), px(0), Color::rgba(0, 0, 0, shadow));
                 if dx.is_some() {
@@ -1641,7 +1712,7 @@ fn detail_body(feature: Feature, item: Value, selected: RwSignal<Option<Value>>)
                         Text(
                             value: computed(move || title.get()),
                             style: css!(
-                                color: Color::hex(LABEL),
+                                color: hex(LABEL),
                                 font_size: px(26),
                                 font_weight: FontWeight::Numeric(600),
                                 text_align: TextAlign::Center,
@@ -1652,12 +1723,12 @@ fn detail_body(feature: Feature, item: Value, selected: RwSignal<Option<Value>>)
                                 style: css!(
                                     padding: (px(4), px(12)),
                                     border_radius: px(999),
-                                    background_color: Color::hex(FILL),
+                                    background_color: hex(FILL),
                                 ),
                             ) {
                                 Text(
                                     value: computed(move || status.get()),
-                                    style: css!(color: Color::hex(LABEL), font_size: px(13)),
+                                    style: css!(color: hex(LABEL), font_size: px(13)),
                                 )
                             }
                         }
@@ -1733,25 +1804,25 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                                     value: label,
                                     style: if inline {
                                         css!(
-                                            color: Color::hex(LABEL),
+                                            color: hex(LABEL),
                                             font_size: px(17),
                                             flex_grow: 1.0,
                                             flex_shrink: 1.0,
                                         )
                                     } else {
-                                        css!(color: Color::hex(LABEL), font_size: px(13))
+                                        css!(color: hex(LABEL), font_size: px(13))
                                     },
                                 )
                                 Text(
                                     value: value,
                                     style: if inline {
                                         css!(
-                                            color: Color::hex(SECONDARY_LABEL),
+                                            color: hex(SECONDARY_LABEL),
                                             font_size: px(17),
                                             flex_shrink: 0.0,
                                         )
                                     } else {
-                                        css!(color: Color::hex(LABEL), font_size: px(17))
+                                        css!(color: hex(LABEL), font_size: px(17))
                                     },
                                 )
                             }
@@ -1804,7 +1875,7 @@ fn nav_bar(
                     left: px(96),
                     right: px(96),
                     text_align: TextAlign::Center,
-                    color: Color::hex(LABEL),
+                    color: hex(LABEL),
                     font_size: px(17),
                     font_weight: FontWeight::Numeric(600),
                 )
@@ -1856,19 +1927,19 @@ fn nav_bar(
                     Text(
                         value: "‹",
                         style: css!(
-                            color: Color::hex(TINT),
+                            color: hex(TINT),
                             font_size: px(34),
                             font_weight: FontWeight::Numeric(300),
                         ),
                     )
-                    Text(value: back_label, style: css!(color: Color::hex(TINT), font_size: px(17)))
+                    Text(value: back_label, style: css!(color: hex(TINT), font_size: px(17)))
                 }
             }
             View(style: css!(padding: (px(6), px(8))), on_tap: move |_| on_action.call()) {
                 Show(when: move || has_action) {
                     Text(
                         value: action_label,
-                        style: css!(color: Color::hex(TINT), font_size: px(17)),
+                        style: css!(color: hex(TINT), font_size: px(17)),
                     )
                 }
             }
@@ -1882,7 +1953,7 @@ fn large_title(title: &'static str) -> Element {
         Text(
             value: title,
             style: css!(
-                color: Color::hex(LABEL),
+                color: hex(LABEL),
                 font_size: px(34),
                 font_weight: FontWeight::Bold,
                 padding: (px(0), px(16), px(8), px(16)),
@@ -1898,7 +1969,7 @@ fn section_header(title: Signal<String>) -> Element {
         Text(
             value: title,
             style: css!(
-                color: Color::hex(SECONDARY_LABEL),
+                color: hex(SECONDARY_LABEL),
                 font_size: px(13),
                 padding: (px(16), px(32), px(6), px(32)),
             ),
@@ -1963,7 +2034,7 @@ fn list_row(
                         value: title,
                         max_lines: 1u32,
                         style: css!(
-                            color: Color::hex(LABEL),
+                            color: hex(LABEL),
                             font_size: px(17),
                         )
                         .text_overflow(TextOverflow::Ellipsis),
@@ -1973,7 +2044,7 @@ fn list_row(
                             value: subtitle,
                             max_lines: 1u32,
                             style: css!(
-                                color: Color::hex(subtitle_color),
+                                color: hex(subtitle_color),
                                 font_size: px(15),
                             )
                             .text_overflow(TextOverflow::Ellipsis),
@@ -1983,11 +2054,11 @@ fn list_row(
                 Text(
                     value: trailing,
                     max_lines: 1u32,
-                    style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(15), flex_shrink: 0.0),
+                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_shrink: 0.0),
                 )
                 Text(
                     value: "›",
-                    style: css!(color: Color::hex(CHEVRON), font_size: px(26), flex_shrink: 0.0),
+                    style: css!(color: hex(CHEVRON), font_size: px(26), flex_shrink: 0.0),
                 )
             }
         }
@@ -2003,7 +2074,7 @@ fn avatar(name: Signal<String>, size: f32) -> Element {
                 width: px(size),
                 height: px(size),
                 border_radius: px(size / 2.0),
-                background_color: Color::hex(AVATAR),
+                background_color: hex(AVATAR),
                 display: Display::Flex,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
@@ -2028,7 +2099,7 @@ fn notice(message: &'static str) -> Element {
         Text(
             value: message,
             style: css!(
-                color: Color::hex(SECONDARY_LABEL),
+                color: hex(SECONDARY_LABEL),
                 font_size: px(15),
                 padding: (px(32), px(16)),
                 text_align: TextAlign::Center,
@@ -2043,7 +2114,7 @@ fn error_notice(message: Signal<String>) -> Element {
         Text(
             value: message,
             style: css!(
-                color: Color::hex(RED),
+                color: hex(RED),
                 font_size: px(15),
                 padding: (px(16), px(32)),
                 text_align: TextAlign::Center,
@@ -2133,7 +2204,7 @@ fn menu_bar_style() -> Css {
         width: px(16),
         height: px(2),
         border_radius: px(1),
-        background_color: Color::hex(LABEL),
+        background_color: hex(LABEL),
     )
 }
 
@@ -2143,7 +2214,7 @@ fn group_style() -> Css {
         flex_direction: FlexDirection::Column,
         margin: (px(0), px(16)),
         border_radius: px(10),
-        background_color: Color::hex(CELL),
+        background_color: cell_color(),
         overflow: Overflow::Hidden,
     )
 }
@@ -2163,7 +2234,7 @@ fn glass_input_style() -> Css {
         font_size: px(17),
         padding_right: px(16),
         background_color: Color::rgba(0, 0, 0, 0.0),
-        color: Color::hex(LABEL),
+        color: hex(LABEL),
     )
 }
 
@@ -2171,7 +2242,7 @@ fn glass_input_style() -> Css {
 fn glass_hairline() -> Border {
     Border::new()
         .width(px(0.5))
-        .color(Color::rgba(60, 60, 67, 0.25))
+        .color(if is_dark() { Color::rgba(84, 84, 88, 0.6) } else { Color::rgba(60, 60, 67, 0.25) })
         .style(BorderStyle::Solid)
 }
 
@@ -2179,6 +2250,6 @@ fn glass_hairline() -> Border {
 fn hairline() -> Border {
     Border::new()
         .width(px(0.5))
-        .color(Color::hex(SEPARATOR))
+        .color(hex(SEPARATOR))
         .style(BorderStyle::Solid)
 }

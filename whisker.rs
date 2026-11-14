@@ -1,5 +1,4 @@
 use whisker_cng::AppIcon;
-use whisker_cng::plugins::info_plist_extra::InfoPlistExtra;
 
 fn main() {
     // CI sets BUILD_NUMBER (the workflow run number) so every TestFlight
@@ -18,12 +17,6 @@ fn main() {
         // App Store needs an icon; actool derives every size from this 1024×1024 PNG.
         app.plugin::<AppIcon>(|c| {
             c.source("assets/icon.png");
-        });
-
-        // The screens are drawn with fixed light colors, so keep the system parts
-        // (lists, sheets, tab bar, keyboard) light too, even in dark mode.
-        app.plugin::<InfoPlistExtra>(|c| {
-            c.add("UIUserInterfaceStyle", "Light");
         });
 
         app.android(|a| {

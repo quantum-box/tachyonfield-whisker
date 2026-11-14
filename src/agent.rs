@@ -536,10 +536,10 @@ pub fn agent_screen(
                                 gap: px(6),
                             ),
                         ) {
-                            Text(value: "✦", style: css!(color: Color::hex(PURPLE), font_size: px(15)))
+                            Text(value: "✦", style: css!(color: hex(PURPLE), font_size: px(15)))
                             Text(
                                 value: "考えています…",
-                                style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(15)),
+                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(15)),
                             )
                         }
                     }
@@ -604,7 +604,7 @@ fn composer(
                         flex_grow: 1.0,
                         height: px(40),
                         font_size: px(17),
-                        color: Color::hex(LABEL),
+                        color: hex(LABEL),
                         background_color: Color::rgba(0, 0, 0, 0.0),
                     ),
                 )
@@ -619,10 +619,10 @@ fn composer(
                             display: Display::Flex,
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
-                            background_color: Color::hex(match (busy, ready) {
+                            background_color: hex(match (busy, ready) {
                                 (true, _) => LABEL,
                                 (false, true) => TINT,
-                                _ => 0xE5E5EA,
+                                _ => DISABLED,
                             }),
                         )
                     }),
@@ -639,7 +639,8 @@ fn composer(
                         style: computed(move || {
                             let busy = sending.get();
                             css!(
-                                color: Color::hex(0xFFFFFF),
+                                // 止めるボタンは文字色の丸。暗い表示では白い丸になるので、■ は黒にする。
+                                color: Color::hex(if busy && is_dark() { 0x000000 } else { 0xFFFFFF }),
                                 font_size: px(if busy { 13.0 } else { 19.0 }),
                                 font_weight: FontWeight::Bold,
                             )
@@ -681,16 +682,16 @@ fn agent_welcome(on_pick: Callback<String>) -> Element {
                 ),
             ) {
                 Glass(corner_radius: 36.0_f32, style: glass_fill())
-                Text(value: "✦", style: css!(color: Color::hex(PURPLE), font_size: px(34)))
+                Text(value: "✦", style: css!(color: hex(PURPLE), font_size: px(34)))
             }
             Text(
                 value: "何をしましょう？",
-                style: css!(color: Color::hex(LABEL), font_size: px(28), font_weight: FontWeight::Bold),
+                style: css!(color: hex(LABEL), font_size: px(28), font_weight: FontWeight::Bold),
             )
             Text(
                 value: "Field のデータについて聞いたり、作業を頼んだりできます。",
                 style: css!(
-                    color: Color::rgba(60, 60, 67, 0.6),
+                    color: placeholder_color(),
                     font_size: px(16),
                     text_align: TextAlign::Center,
                 ),
@@ -720,7 +721,7 @@ fn agent_welcome(on_pick: Callback<String>) -> Element {
                                 Glass(corner_radius: 21.0_f32, style: glass_fill())
                                 Text(
                                     value: example,
-                                    style: css!(color: Color::hex(LABEL), font_size: px(15)),
+                                    style: css!(color: hex(LABEL), font_size: px(15)),
                                 )
                             }
                         }
@@ -759,7 +760,7 @@ fn user_bubble(text: Signal<String>) -> Element {
                     max_width: percent(80),
                     padding: (px(10), px(14)),
                     border_radius: px(20),
-                    background_color: Color::hex(TINT),
+                    background_color: hex(TINT),
                 ),
             ) {
                 Text(value: text, style: css!(color: Color::hex(0xFFFFFF), font_size: px(16)))
@@ -774,7 +775,7 @@ fn assistant_text(text: Signal<String>) -> Element {
     render! {
         Text(
             value: text,
-            style: css!(color: Color::hex(LABEL), font_size: px(16)).line_height(LineHeight::Number(1.5)),
+            style: css!(color: hex(LABEL), font_size: px(16)).line_height(LineHeight::Number(1.5)),
         )
     }
 }
@@ -797,7 +798,7 @@ fn tool_line(text: Signal<String>, state: Signal<Role>) -> Element {
             _ => 0x34C759,
         };
         css!(
-            color: Color::hex(color),
+            color: hex(color),
             font_size: px(13),
             font_weight: FontWeight::Bold,
             width: px(14),
@@ -818,7 +819,7 @@ fn tool_line(text: Signal<String>, state: Signal<Role>) -> Element {
                 value: text,
                 style: css!(
                     flex_shrink: 1.0,
-                    color: Color::hex(SECONDARY_LABEL),
+                    color: hex(SECONDARY_LABEL),
                     font_size: px(13),
                     text_overflow: TextOverflow::Ellipsis,
                 ),
@@ -831,7 +832,7 @@ fn tool_line(text: Signal<String>, state: Signal<Role>) -> Element {
 #[component]
 fn notice_line(text: Signal<String>) -> Element {
     render! {
-        Text(value: text, style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(13)))
+        Text(value: text, style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)))
     }
 }
 
@@ -853,7 +854,7 @@ fn summary_line(text: Signal<String>, open: Signal<bool>, on_tap: Callback<()>) 
             Text(
                 value: "✓",
                 style: css!(
-                    color: Color::hex(SECONDARY_LABEL),
+                    color: hex(SECONDARY_LABEL),
                     font_size: px(13),
                     font_weight: FontWeight::Bold,
                     width: px(14),
@@ -861,7 +862,7 @@ fn summary_line(text: Signal<String>, open: Signal<bool>, on_tap: Callback<()>) 
             )
             Text(
                 value: label,
-                style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(13)),
+                style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)),
             )
         }
     }

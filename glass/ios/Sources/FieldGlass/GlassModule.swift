@@ -72,6 +72,9 @@ public final class GlassModule: Module {
             View("field-glass:KeyboardObserver", FieldKeyboardObserverView.self) {
                 Events("change")
             }
+            View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
+                Events("change")
+            }
         }
     }
 }
