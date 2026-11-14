@@ -31,6 +31,11 @@ fn main() {
         // needs no export documents, so TestFlight stops asking on every build.
         app.plugin::<InfoPlistExtra>(|c| {
             c.add("ITSAppUsesNonExemptEncryption", "NO");
+            // Agent にカメラで撮った写真を渡すとき。
+            c.add(
+                "NSCameraUsageDescription",
+                "撮った写真を Field Agent に渡すためにカメラを使います。",
+            );
         });
 
         app.android(|a| {

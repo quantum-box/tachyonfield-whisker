@@ -349,6 +349,8 @@ pub enum AgentEvent {
     Failed(String),
     /// アクセストークンを取り直した。画面側はこれを覚えておく。
     Renewed(String),
+    /// 添付ファイルを Field へ上げ終えた。次の回からもこの会話で使えるよう覚えておく。
+    Attached(Vec<AgentFile>),
 }
 
 /// Field Agent の会話を 1 つ作り、その ID（`as_…`）を返す。
@@ -378,8 +380,10 @@ pub fn agent_stream(
     tenant: &Tenant,
     session: &str,
     task: &str,
+    files: &[AgentFile],
+    inline: &[Value],
     cancel: &std::sync::atomic::AtomicBool,
-    mut emit: impl FnMut(AgentEvent),
+    emit: impl Fn(AgentEvent),
 ) -> Result<(), String> {
     use std::io::BufRead;
     use std::sync::atomic::Ordering;
@@ -405,7 +409,8 @@ pub fn agent_stream(
             "task": task,
             "page": "/mobile",
             "server_tools": true,
-            "files": [],
+            "attachments": inline,
+            "files": files,
             "allowed_jobs": [],
         }))
         .map_err(describe_error)?;
@@ -505,4 +510,68 @@ fn tool_label(event: &Value) -> String {
         "" => "操作".into(),
         other => other.replace('_', " "),
     }
+}
+
+/// Agent に渡すファイル。先に Field へ上げておき、その置き場所（id）で渡す。
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct AgentFile {
+    pub id: String,
+    pub name: String,
+    pub content_type: String,
+    pub size: u64,
+}
+
+/// 1 回で送れる大きさ。これより大きいファイルは、預け先の URL を受け取って直接上げる。
+const RELAY_UPLOAD_BYTES: usize = 4_500_000;
+
+/// Agent に渡すファイルを Field に上げ、置き場所の id を返す。
+pub fn upload_attachment(
+    token: &str,
+    tenant: &Tenant,
+    name: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let request = |method: &str, path: &str| {
+        field_request(method, path, token, &tenant.id, &tenant.platform_id)
+            .timeout(Duration::from_secs(120))
+    };
+    if bytes.len() <= RELAY_UPLOAD_BYTES {
+        let response: Value = request("POST", "/v1/field/agent/attachments/upload")
+            .query("name", name)
+            .query("content_type", content_type)
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(bytes)
+            .map_err(describe_error)?
+            .into_json()
+            .map_err(|e| e.to_string())?;
+        return attachment_id(&response);
+    }
+    let created: Value = request("POST", "/v1/field/agent/attachments")
+        .send_json(json!({ "name": name, "content_type": content_type, "size": bytes.len() }))
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|e| e.to_string())?;
+    let id = attachment_id(&created)?;
+    let url = created["upload_url"]
+        .as_str()
+        .ok_or("ファイルの預け先が返ってきませんでした")?;
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .put(url)
+        .set("content-type", content_type)
+        .send_bytes(bytes)
+        .map_err(|e| format!("ファイルを上げられませんでした: {e}"))?;
+    request("POST", "/v1/field/agent/attachments/confirm")
+        .send_json(json!({ "attachment_id": id }))
+        .map_err(describe_error)?;
+    Ok(id)
+}
+
+fn attachment_id(response: &Value) -> Result<String, String> {
+    response["attachment_id"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "ファイルの置き場所が返ってきませんでした".into())
 }

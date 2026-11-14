@@ -37,6 +37,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_nav_bar_schema::element_provider(),
             native_sheet_schema::element_provider(),
             native_backdrop_schema::element_provider(),
+            native_attach_button_schema::element_provider(),
         ],
     )
 }
@@ -444,4 +445,47 @@ pub fn backdrop(style: Style) -> Element {
             View(style: painted)
         }
     }
+}
+
+/// 選ばれたファイル 1 つ。`path` は一時フォルダに書き出された写し。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PickedFile {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, rename = "type")]
+    pub content_type: String,
+    #[serde(default)]
+    pub size: f64,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct AttachPickEvent {
+    #[serde(default)]
+    pub detail: PickedFile,
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:AttachButton", measurement = None)]
+pub fn native_attach_button(style: Style, on_pick: AttachPickEvent) {}
+
+/// 「＋」ボタン。押すと「写真」「カメラ」「ファイル」を選ぶメニューが出て、
+/// 選ばれたファイルごとに `on_pick` が呼ばれる。iOS 以外は何も出さない。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn attach_button(on_pick: Callback<PickedFile>, style: Style) -> Element {
+    NativeAttachButton::builder()
+        .style(style.clone())
+        .on_pick(move |e: AttachPickEvent| on_pick.run(e.detail))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn attach_button(on_pick: Callback<PickedFile>, style: Style) -> Element {
+    let _ = (&on_pick, &style);
+    render! { View() }
 }
