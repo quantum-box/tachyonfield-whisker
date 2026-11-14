@@ -78,6 +78,21 @@ public final class GlassModule: Module {
             View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
                 Events("change")
             }
+            View("field-glass:NavBar", FieldNavBarView.self) {
+                Prop("title") { (view: FieldNavBarView, value: WhiskerValue) in
+                    view.setTitle(value.asString ?? "")
+                }
+                Prop("back") { (view: FieldNavBarView, value: WhiskerValue) in
+                    view.setBack(value.asString ?? "")
+                }
+                Prop("menu") { (view: FieldNavBarView, value: WhiskerValue) in
+                    view.setMenu(value.asBool ?? (value.asString == "true"))
+                }
+                Prop("action") { (view: FieldNavBarView, value: WhiskerValue) in
+                    view.setAction(value.asString ?? "")
+                }
+                Events("press")
+            }
         }
     }
 }
