@@ -111,6 +111,7 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
     }()
 
     private let refresh = UIRefreshControl()
+    private let swipeGuard = SwipeGuard()
 
     private lazy var host: RecordListHost = {
         let host = RecordListHost()
@@ -119,6 +120,7 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
         table.delegate = self
         table.keyboardDismissMode = .onDrag
         table.refreshControl = refresh
+        swipeGuard.attach(to: table)
         host.searchBar.delegate = self
         refresh.addTarget(self, action: #selector(didPullToRefresh), for: .valueChanged)
         return host
@@ -200,6 +202,10 @@ public final class FieldRecordListView: WhiskerUI<UIView>, UITableViewDataSource
     }
 
     // MARK: - 操作
+
+    public func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
+        swipeGuard.allowsSelection ? indexPath : nil
+    }
 
     public func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)

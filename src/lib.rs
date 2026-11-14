@@ -483,8 +483,8 @@ struct Drawer(RwSignal<bool>);
 
 /// 裏のメニューの幅。表の画面はこの分だけ右にずれる。
 const DRAWER_WIDTH: f32 = 300.0;
-/// 閉じているとき、指をこの幅より左端で置いたときだけ引き出せる（縦スクロールと取り合わない）。
-const EDGE: f32 = 32.0;
+/// 指がこれだけ動くまでは、横に引いたのか縦にスクロールしたのか決めない。
+const SLOP: f32 = 10.0;
 
 /// 下のタブで今開いているもの。
 #[derive(Clone, Copy, PartialEq)]
@@ -519,8 +519,8 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
     let open = signal(false);
     // 指で動かしている最中の位置。離したら None に戻し、開く・閉じるに寄せる。
     let drag = signal(None::<f32>);
-    // 指を置いた位置と、そのときの表の画面の位置。
-    let start = signal(None::<(f32, f32)>);
+    // 指を置いた位置（x, y）と、そのときの表の画面の位置。
+    let start = signal(None::<(f32, f32, f32)>);
     provide_context(Drawer(open));
     let insets = safe_area_insets();
 
@@ -577,22 +577,27 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                         )
                     }
                 }),
+                // 画面のどこからでも、左から右へ引けばメニューが出る（開いているときは右から左で閉じる）。
                 on_capture_touchstart: move |e: TouchEvent| {
-                    let x = e.detail.x as f32;
-                    if open.get_untracked() || x <= EDGE {
-                        start.set(Some((x, offset.get_untracked())));
-                    } else {
-                        start.set(None);
-                    }
+                    let (x, y) = (e.detail.x as f32, e.detail.y as f32);
+                    start.set(Some((x, y, offset.get_untracked())));
                 },
                 on_capture_touchmove: move |e: TouchEvent| {
-                    let Some((x0, base)) = start.get_untracked() else {
+                    let Some((x0, y0, base)) = start.get_untracked() else {
                         return;
                     };
                     let dx = e.detail.x as f32 - x0;
-                    // 少し動いただけ（タップ）は引き出しにしない。
-                    if drag.get_untracked().is_none() && dx.abs() < 10.0 {
-                        return;
+                    if drag.get_untracked().is_none() {
+                        let dy = e.detail.y as f32 - y0;
+                        // 少し動いただけ（タップ）は、まだ決めない。
+                        if dx.abs() < SLOP && dy.abs() < SLOP {
+                            return;
+                        }
+                        // 縦の動きが勝つならスクロールに任せる。閉じているときに右から左へ引いたのも無視する。
+                        if dy.abs() > dx.abs() || (!open.get_untracked() && dx < 0.0) {
+                            start.set(None);
+                            return;
+                        }
                     }
                     drag.set(Some((base + dx).clamp(0.0, DRAWER_WIDTH)));
                 },
@@ -643,7 +648,7 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
     }
 }
 
-/// 表の画面の裏にあるメニュー。左端から右へ引くか、「☰」で見える。
+/// 表の画面の裏にあるメニュー。画面を左から右へ引くか、「☰」で見える。
 /// 会社（テナント）の切り替えと、分野（下のタブの中身）の切り替えをする。
 #[component]
 fn side_menu(

@@ -52,10 +52,12 @@ struct MenuSection {
 final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate {
     var sections: [MenuSection] = []
     var onSelect: ((String) -> Void)?
+    private let swipeGuard = SwipeGuard()
 
     func attach(to table: UITableView) {
         table.dataSource = self
         table.delegate = self
+        swipeGuard.attach(to: table)
         table.register(UITableViewCell.self, forCellReuseIdentifier: "row")
     }
 
@@ -108,6 +110,10 @@ final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate
         }
         cell.contentConfiguration = content
         return cell
+    }
+
+    func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
+        swipeGuard.allowsSelection ? indexPath : nil
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
