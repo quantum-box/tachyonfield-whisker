@@ -26,9 +26,17 @@ public final class FieldAppearanceObserverView: WhiskerUI<UIView> {
 
 private final class TraitWatcher: UIView {
     var onChange: ((Bool) -> Void)?
+    private var activeObserver: NSObjectProtocol?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // 起動の途中は、まだ明るい表示と答えることがある。アプリが前に出たときにも測り直す
+        // （同じ答えなら Rust には知らせない）。
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.notify()
+        }
         if #available(iOS 17.0, *) {
             registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: TraitWatcher, _) in
                 view.notify()
@@ -37,6 +45,15 @@ private final class TraitWatcher: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    deinit {
+        if let activeObserver { NotificationCenter.default.removeObserver(activeObserver) }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if window != nil { notify() }
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -49,7 +66,10 @@ private final class TraitWatcher: UIView {
     }
 
     private func notify() {
-        onChange?(traitCollection.userInterfaceStyle == .dark)
+        // 自分の見た目ではなく、画面（ウィンドウ）の設定を見る。
+        let style = window?.traitCollection.userInterfaceStyle ?? traitCollection.userInterfaceStyle
+        guard style != .unspecified else { return }
+        onChange?(style == .dark)
     }
 }
 #endif

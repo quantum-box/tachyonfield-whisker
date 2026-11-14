@@ -35,7 +35,6 @@ use whisker_safe_area::safe_area_insets;
 // iOS のシステムカラー。ここには明るい表示（ライト）の色を書き、
 // 暗い表示（ダーク）の色は `dark_of` で対応させる。色は必ず `hex()` を通して使う。
 const SYSTEM_BACKGROUND: u32 = 0xFFFFFF; // 画面の背景（白）
-const DRAWER_BACKGROUND: u32 = 0xF2F2F7; // 裏のメニューの背景（表の白と見分ける）
 const LABEL: u32 = 0x000000;
 const SECONDARY_LABEL: u32 = 0x8A8A8E;
 const SEPARATOR: u32 = 0xC6C6C8;
@@ -66,7 +65,6 @@ fn hex(light: u32) -> Color {
 fn dark_of(light: u32) -> u32 {
     match light {
         SYSTEM_BACKGROUND => 0x000000,
-        DRAWER_BACKGROUND => 0x000000,
         LABEL => 0xFFFFFF,
         SECONDARY_LABEL => 0x8D8D93,
         SEPARATOR => 0x38383A,
@@ -81,6 +79,12 @@ fn dark_of(light: u32) -> u32 {
         DISABLED => 0x3A3A3C,
         other => other,
     }
+}
+
+/// 裏のメニューの地の色。明るい表示は表と同じ白（表の画面は影付きの角丸の板で見分ける）、
+/// 暗い表示は表の黒と見分けられる濃い灰色。
+fn drawer_color() -> Color {
+    Color::hex(if is_dark() { 0x1C1C1E } else { 0xFFFFFF })
 }
 
 /// 白い板（設定画面のような、角の丸いまとまり）の色。暗い表示では黒地に浮くよう濃い灰色。
@@ -568,7 +572,7 @@ const BEHIND_SHIFT: f32 = 90.0;
 const BEHIND_TRAVEL: f32 = 320.0;
 
 /// 裏のメニューの幅。表の画面はこの分だけ右にずれる。
-const DRAWER_WIDTH: f32 = 300.0;
+const DRAWER_WIDTH: f32 = 320.0;
 /// 指がこれだけ動くまでは、横に引いたのか縦にスクロールしたのか決めない。
 const SLOP: f32 = 10.0;
 
@@ -648,7 +652,8 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
             View(
                 style: computed(move || {
                     let x = offset.get();
-                    let shadow = (x / DRAWER_WIDTH).clamp(0.0, 1.0) * 0.22;
+                    let progress = (x / DRAWER_WIDTH).clamp(0.0, 1.0);
+                    let shadow = progress * 0.22;
                     // 親は上の余白（時計などの帯）の下から始まるので、その分だけ上へ伸ばして帯まで塗る。
                     let safe_top = insets.get().top as f32;
                     let s = css!(
@@ -661,10 +666,24 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                         display: Display::Flex,
                         flex_direction: FlexDirection::Column,
                         background_color: hex(SYSTEM_BACKGROUND),
+                        // 開くにつれて角を丸め、表の画面を 1 枚の板に見せる（画面の角に近い丸み）。
+                        border_radius: px(44.0 * progress),
+                        overflow: Overflow::Hidden,
                     )
                     .transform(TransformFn::TranslateX(px(x).into()))
-                    .box_shadow(px(0), px(0), px(24), px(0), Color::rgba(0, 0, 0, shadow))
+                    .box_shadow(px(0), px(0), px(30), px(0), Color::rgba(0, 0, 0, shadow))
                     .z_index(5);
+                    // 暗い表示では影が見えないので、縁に細い線を引いて板の形を見せる。
+                    let s = if is_dark() && progress > 0.0 {
+                        s.border(
+                            Border::new()
+                                .width(px(0.5))
+                                .color(Color::rgba(255, 255, 255, 0.18 * progress))
+                                .style(BorderStyle::Solid),
+                        )
+                    } else {
+                        s
+                    };
                     if drag.get().is_some() {
                         s
                     } else {
@@ -780,7 +799,7 @@ fn side_menu(
                     width: px(DRAWER_WIDTH),
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
-                    background_color: hex(DRAWER_BACKGROUND),
+                    background_color: drawer_color(),
                 )
                 .z_index(1)
             }),
@@ -823,22 +842,34 @@ fn feature_symbol(label: &str) -> &'static str {
 fn area_symbol(name: &str) -> &'static str {
     match name {
         "販売管理" => "chart.line.uptrend.xyaxis",
-        "顧客管理" => "person.2.fill",
+        "顧客管理" => "person.2",
         "予約・人事" => "calendar",
-        "商品・仕入" => "shippingbox.fill",
-        "請求・経費" => "yensign",
-        _ => "square.grid.2x2.fill",
+        "商品・仕入" => "shippingbox",
+        "請求・経費" => "yensign.circle",
+        _ => "square.grid.2x2",
     }
 }
 
-/// 標準の一覧の行の鍵（機能名と重ならない文字）。
+
+/// 設定のシートの行の鍵（機能名と重ならない文字）。
 #[cfg(target_os = "ios")]
 const SIGN_OUT_KEY: &str = "__sign_out";
 #[cfg(target_os = "ios")]
 const TENANT_KEY: &str = "__tenant";
 
-/// 裏のメニューの中身。iOS は設定アプリと同じ標準の一覧（UITableView）。
-/// 一番上の会社名を押すと、下から会社の一覧のシートが出て、選ぶとその場で切り替わる。
+/// 設定のシートで今見せている中身。
+#[cfg(target_os = "ios")]
+#[derive(Clone, Copy, PartialEq)]
+enum SheetPage {
+    /// 今の会社とサインアウト。
+    Settings,
+    /// 会社の一覧（選ぶと切り替わる）。
+    Tenants,
+}
+
+/// 裏のメニューの中身。上に会社名、真ん中に分野の一覧（iOS 標準の UITableView）、
+/// 下に設定（⚙）。設定を押すと下からシートが出て、会社の切り替えとサインアウトができる。
+/// 会社の切り替えを選ぶと、同じシートの中身が会社の一覧に変わり、選ぶとその場で切り替わる。
 #[cfg(target_os = "ios")]
 #[component]
 fn drawer_items(
@@ -853,41 +884,49 @@ fn drawer_items(
     let choosing = signal(false);
     let tenants = signal(Vec::<Tenant>::new());
     let tenants_error = signal(String::new());
+    let insets = safe_area_insets();
+    let tenant_name =
+        computed(move || tenant.with(|t| t.as_ref().map(|t| t.name.clone()).unwrap_or_default()));
+    let environment = computed(move || {
+        tenant.with(|t| environment_label(t.as_ref().map_or("", |t| t.environment.as_str())).to_owned())
+    });
 
     let sections = computed(move || {
-        let current = tenant.get();
-        let company = json!({
-            "key": TENANT_KEY,
-            "title": current.as_ref().map(|t| t.name.clone()).unwrap_or_default(),
-            "subtitle": current.as_ref().map_or("", |t| environment_label(&t.environment)),
-            "symbol": "building.columns.fill",
-            "color": "#8E8E93",
-        });
         let selected_area = area.get();
         let areas: Vec<serde_json::Value> = MENU
             .iter()
             .enumerate()
-            .map(|(i, (name, items))| {
-                let labels: Vec<&str> = items.iter().map(|f| f.label).collect();
+            .map(|(i, (name, _))| {
                 json!({
                     "key": format!("area:{i}"),
                     "title": name,
-                    "subtitle": labels.join("・"),
                     "symbol": area_symbol(name),
-                    "color": format!("#{:06X}", items.first().map_or(0x8E8E93, |f| f.color)),
                     "accessory": if i == selected_area { "check" } else { "none" },
                 })
             })
             .collect();
+        json!([{ "title": "分野", "rows": areas }])
+        .to_string()
+    });
+
+    // 設定のシートの中身：今の会社（押すと会社の一覧に変わる）と、サインアウト。
+    let sheet_page = signal(SheetPage::Settings);
+    let settings_sections = computed(move || {
+        let current = tenant.get();
         json!([
-            { "title": "会社", "rows": [company] },
-            { "title": "分野", "rows": areas },
+            { "title": "会社", "rows": [{
+                "key": TENANT_KEY,
+                "title": current.as_ref().map(|t| t.name.clone()).unwrap_or_default(),
+                "subtitle": current.as_ref().map_or("", |t| environment_label(&t.environment)),
+                "symbol": "building.columns.fill",
+                "color": "#8E8E93",
+            }] },
             { "title": "", "rows": [{ "key": SIGN_OUT_KEY, "title": "サインアウト", "destructive": true }] },
         ])
         .to_string()
     });
 
-    // シートの中身：使える会社の一覧。今の会社に ✓。
+    // 会社の一覧のシートの中身：使える会社。今の会社に ✓。
     let tenant_sections = computed(move || {
         let current_id = tenant.with(|t| t.as_ref().map(|t| t.id.clone()).unwrap_or_default());
         let list = tenants.get();
@@ -932,26 +971,95 @@ fn drawer_items(
                 .flex_basis(px(0))
                 .min_height(px(0)),
         ) {
+            // 今の会社名（大きく）。切り替えは下の設定から。
+            View(
+                style: css!(
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    padding: (px(20), px(24), px(8), px(24)),
+                ),
+            ) {
+                Text(
+                    value: tenant_name,
+                    max_lines: 1u32,
+                    style: css!(
+                        color: hex(LABEL),
+                        font_size: px(28),
+                        font_weight: FontWeight::Bold,
+                        text_overflow: TextOverflow::Ellipsis,
+                    ),
+                )
+                Text(
+                    value: environment,
+                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(14), margin_top: px(4)),
+                )
+            }
             SystemMenuList(
                 sections: sections,
                 on_select: move |key: String| {
-                    if key == SIGN_OUT_KEY {
-                        sign_out(token, tenant);
-                    } else if key == TENANT_KEY {
-                        choosing.set(true);
-                        // 開くたびに読み直す（前の一覧は読み終わるまで見せておく）。
-                        load_tenants();
-                    } else if let Some(index) = key.strip_prefix("area:").and_then(|i| i.parse().ok()) {
+                    if let Some(index) = key.strip_prefix("area:").and_then(|i| i.parse().ok()) {
                         choose_area(index, area, page, open);
                     }
                 },
                 style: css!(flex_grow: 1.0).flex_basis(px(0)).min_height(px(0)),
             )
+            // 下の端：設定（ガラスの丸いボタン）。
+            View(
+                style: computed(move || {
+                    css!(
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Row,
+                        padding: (px(8), px(20), px((insets.get().bottom as f32).max(16.0)), px(20)),
+                    )
+                }),
+            ) {
+                View(
+                    style: css!(
+                        position: PositionKind::Relative,
+                        width: px(48),
+                        height: px(48),
+                        display: Display::Flex,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                    ),
+                    on_tap: move |_| {
+                        sheet_page.set(SheetPage::Settings);
+                        choosing.set(true);
+                    },
+                ) {
+                    Glass(
+                        corner_radius: 24.0_f32,
+                        style: css!(position: PositionKind::Absolute, top: px(0), bottom: px(0), left: px(0), right: px(0)),
+                    )
+                    Text(value: "⚙\u{FE0E}", style: css!(color: hex(LABEL), font_size: px(28)))
+                }
+            }
             SystemSheet(
                 open: choosing,
-                title: "会社を切り替える",
-                sections: tenant_sections,
+                title: computed(move || match sheet_page.get() {
+                    SheetPage::Settings => "設定".to_owned(),
+                    SheetPage::Tenants => "会社を切り替える".to_owned(),
+                }),
+                sections: computed(move || match sheet_page.get() {
+                    SheetPage::Settings => settings_sections.get(),
+                    SheetPage::Tenants => tenant_sections.get(),
+                }),
+                search: computed(move || match sheet_page.get() {
+                    SheetPage::Settings => String::new(),
+                    SheetPage::Tenants => "会社を検索".to_owned(),
+                }),
                 on_select: move |key: String| {
+                    if key == TENANT_KEY {
+                        sheet_page.set(SheetPage::Tenants);
+                        // 開くたびに読み直す（前の一覧は読み終わるまで見せておく）。
+                        load_tenants();
+                        return;
+                    }
+                    if key == SIGN_OUT_KEY {
+                        choosing.set(false);
+                        sign_out(token, tenant);
+                        return;
+                    }
                     let Some(id) = key.strip_prefix("tenant:") else {
                         return;
                     };

@@ -66,6 +66,9 @@ public final class GlassModule: Module {
                 Prop("sections") { (view: FieldSheetView, value: WhiskerValue) in
                     view.setSections(value.asString ?? "[]")
                 }
+                Prop("search") { (view: FieldSheetView, value: WhiskerValue) in
+                    view.setSearch(value.asString ?? "")
+                }
                 Events("select", "dismiss")
             }
             View("field-glass:Backdrop", FieldBackdropView.self) {}
