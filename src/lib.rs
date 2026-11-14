@@ -9,6 +9,7 @@
 mod agent;
 mod api;
 mod features;
+mod markdown;
 mod storage;
 
 use agent::AgentScreen;

@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures_util::StreamExt;
-use whisker::css::LineHeight;
 use whisker::runtime::view::observe_layout;
 use whisker::{ElementHandle, ScrollViewHandle};
 
@@ -192,22 +191,6 @@ impl AgentChat {
     }
 }
 
-/// 返事の文から、この画面では飾りにできない Markdown の記号を外す。
-fn plain_text(raw: &str) -> String {
-    raw.replace("**", "")
-        .replace("__", "")
-        .lines()
-        .map(|line| {
-            let line = line.trim_start_matches('#').trim_start();
-            match line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-                Some(rest) => format!("・{rest}"),
-                None => line.to_owned(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[component]
 pub fn agent_screen(
     token: RwSignal<Option<String>>,
@@ -363,7 +346,7 @@ pub fn agent_screen(
                         };
                         raw.push_str(&text);
                         shown.push_str(&text);
-                        let display = plain_text(&raw);
+                        let display = raw.clone();
                         messages.update(|list| {
                             if let Some(m) = list.iter_mut().find(|m| m.id == id) {
                                 m.text = display;
@@ -391,7 +374,7 @@ pub fn agent_screen(
                         if !shown.contains(result.trim()) {
                             paragraph = None;
                             let id = chat.push(Role::Assistant, String::new(), String::new());
-                            chat.append(id, &plain_text(&result));
+                            chat.append(id, &result);
                             shown.push_str(&result);
                         }
                     }
@@ -769,15 +752,10 @@ fn user_bubble(text: Signal<String>) -> Element {
     }
 }
 
-/// Agent の返事：吹き出しなしで、画面の幅いっぱいの文。
+/// Agent の返事：吹き出しなしで、画面の幅いっぱいの文。見出し・太字・箇条書き・表などを飾る。
 #[component]
 fn assistant_text(text: Signal<String>) -> Element {
-    render! {
-        Text(
-            value: text,
-            style: css!(color: hex(LABEL), font_size: px(16)).line_height(LineHeight::Number(1.5)),
-        )
-    }
+    render! { crate::markdown::Markdown(text: text) }
 }
 
 /// Agent が使った操作：小さな 1 行。動いている間は「…」、終わったら ✓、失敗は !。
