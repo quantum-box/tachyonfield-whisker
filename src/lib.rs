@@ -8,6 +8,7 @@
 
 mod agent;
 mod api;
+mod attachments;
 mod features;
 mod markdown;
 mod storage;
@@ -15,7 +16,7 @@ mod storage;
 use agent::AgentScreen;
 use api::Tenant;
 use features::{Feature, MENU};
-use field_glass::{AppearanceObserver, Backdrop, Glass, KeyboardObserver};
+use field_glass::{AppearanceObserver, AttachButton, Backdrop, Glass, KeyboardObserver};
 #[cfg(target_os = "ios")]
 use field_glass::{
     MenuList as SystemMenuList, NavBar as SystemNavBar, RecordList as SystemRecordList,

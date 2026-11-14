@@ -1,0 +1,23 @@
+{
+  "pins" : [
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "2bc86522d115234d1f588efe2bcb4ce4be8f8b82",
+        "version" : "510.0.3"
+      }
+    },
+    {
+      "identity" : "whisker",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/whiskerrs/whisker.git",
+      "state" : {
+        "revision" : "6c341171bafb95c341b0636b8dc19c91da7b478c",
+        "version" : "0.1.21"
+      }
+    }
+  ],
+  "version" : 2
+}

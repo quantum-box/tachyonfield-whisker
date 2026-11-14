@@ -63,6 +63,10 @@ pub struct AgentChat {
     turn: RwSignal<usize>,
     /// まとめ行を押して開いている回。
     expanded: RwSignal<Vec<usize>>,
+    /// この会話で Field へ上げたファイル。次の回からも Agent に渡す。
+    files: RwSignal<Vec<api::AgentFile>>,
+    /// 送る前の添付ファイル（入力欄の上に並ぶ）。
+    pending: RwSignal<Vec<field_glass::PickedFile>>,
     /// 今流れている返事を止める旗。
     cancel: RwSignal<Option<Arc<AtomicBool>>>,
     /// 返事を受ける仕事の持ち主（ホーム）。画面の一部（案内やタブ）が消えても止まらないように。
@@ -78,6 +82,8 @@ impl AgentChat {
             next_id: signal(0),
             turn: signal(0),
             expanded: signal(Vec::new()),
+            files: signal(Vec::new()),
+            pending: signal(Vec::new()),
             cancel: signal(None),
             owner: whisker::Owner::current(),
         }
@@ -237,16 +243,27 @@ pub fn agent_screen(
     });
 
     let send = move || {
-        let task = draft.get_untracked().trim().to_owned();
-        if task.is_empty() || sending.get_untracked() {
+        let typed = draft.get_untracked().trim().to_owned();
+        let picked = chat.pending.get_untracked();
+        if (typed.is_empty() && picked.is_empty()) || sending.get_untracked() {
             return;
         }
         let Some(current) = tenant.get_untracked() else {
             return;
         };
+        // 文なしでファイルだけ送ったときは、中身を見てもらう。
+        let task = if typed.is_empty() { "添付したファイルを見てください".to_owned() } else { typed.clone() };
         draft.set(String::new());
+        chat.pending.set(Vec::new());
         chat.turn.set(chat.turn.get_untracked() + 1);
-        chat.push(Role::User, task.clone(), String::new());
+        let mut shown = typed;
+        for file in &picked {
+            if !shown.is_empty() {
+                shown.push('\n');
+            }
+            shown.push_str(&format!("📎 {}", file.name));
+        }
+        chat.push(Role::User, shown, String::new());
         sending.set(true);
         let cancel = Arc::new(AtomicBool::new(false));
         chat.cancel.set(Some(cancel.clone()));
@@ -288,40 +305,56 @@ pub fn agent_screen(
             let (sender, mut events) = futures_channel::mpsc::unbounded::<AgentEvent>();
             let access = token.get_untracked().unwrap_or_default();
             let flag = cancel.clone();
+            let earlier = chat.files.get_untracked();
             std::thread::spawn(move || {
-                let mut result =
-                    api::agent_stream(&access, &current, &session, &task, &flag, |event| {
-                        let _ = sender.unbounded_send(event);
-                    });
+                let mut access = access;
+                let send = |event| {
+                    let _ = sender.unbounded_send(event);
+                };
+                // 先にファイルを Field へ上げる。トークンが切れていたら 1 回だけ取り直す。
+                let mut prepared = attachments::prepare(&access, &current, &picked);
+                if matches!(&prepared, Err(e) if e == api::EXPIRED) {
+                    if let Some(renewed) = renew(&send) {
+                        access = renewed;
+                        prepared = attachments::prepare(&access, &current, &picked);
+                    }
+                }
+                let (added, inline) = match prepared {
+                    Ok(done) => done,
+                    Err(message) => {
+                        send(AgentEvent::Failed(message));
+                        return;
+                    }
+                };
+                if flag.load(Ordering::Relaxed) {
+                    return;
+                }
+                if !added.is_empty() {
+                    send(AgentEvent::Attached(added.clone()));
+                }
+                let mut files = earlier;
+                files.extend(added.iter().cloned());
+                let task = attachments::with_manifest(&task, &files, &added, &inline);
+                let inline: Vec<serde_json::Value> = inline.into_iter().map(|i| i.body).collect();
+
+                let mut result = api::agent_stream(
+                    &access, &current, &session, &task, &files, &inline, &flag, &send,
+                );
                 // トークンが切れていたら取り直して 1 回だけ送り直す。期限切れは送った直後
                 // （まだ何も流れていない時）に返るので、同じ頼みを二重に流すことはない。
                 if matches!(&result, Err(e) if e == api::EXPIRED) {
-                    if let Some(refresh_token) = storage::refresh_token() {
-                        if let Ok(renewed) = api::refresh(&refresh_token) {
-                            if let Some(rotated) = &renewed.refresh_token {
-                                storage::save_refresh_token(rotated);
-                            }
-                            let _ = sender
-                                .unbounded_send(AgentEvent::Renewed(renewed.access_token.clone()));
-                            // 取り直している間に止められていたら、送り直さない。
-                            if flag.load(Ordering::Relaxed) {
-                                return;
-                            }
-                            result = api::agent_stream(
-                                &renewed.access_token,
-                                &current,
-                                &session,
-                                &task,
-                                &flag,
-                                |event| {
-                                    let _ = sender.unbounded_send(event);
-                                },
-                            );
+                    if let Some(renewed) = renew(&send) {
+                        // 取り直している間に止められていたら、送り直さない。
+                        if flag.load(Ordering::Relaxed) {
+                            return;
                         }
+                        result = api::agent_stream(
+                            &renewed, &current, &session, &task, &files, &inline, &flag, &send,
+                        );
                     }
                 }
                 if let Err(message) = result {
-                    let _ = sender.unbounded_send(AgentEvent::Failed(message));
+                    send(AgentEvent::Failed(message));
                 }
             });
 
@@ -382,6 +415,7 @@ pub fn agent_screen(
                         chat.push(Role::Notice, message, String::new());
                     }
                     AgentEvent::Renewed(access) => token.set(Some(access)),
+                    AgentEvent::Attached(added) => chat.files.update(|f| f.extend(added)),
                 }
             }
             if !cancel.load(Ordering::Relaxed) {
@@ -440,6 +474,7 @@ pub fn agent_screen(
                     messages.set(Vec::new());
                     chat.expanded.set(Vec::new());
                     chat.session.set(None);
+                    chat.files.set(Vec::new());
                 },
             )
             KeyboardObserver(on_change: move |height: f32| keyboard.set(height))
@@ -532,6 +567,7 @@ pub fn agent_screen(
                 draft: draft,
                 input: input,
                 sending: sending,
+                pending: chat.pending,
                 on_send: move |_| send(),
                 on_stop: move |_| chat.stop(),
             )
@@ -552,6 +588,7 @@ fn composer(
     draft: RwSignal<String>,
     input: InputRef,
     sending: RwSignal<bool>,
+    pending: RwSignal<Vec<field_glass::PickedFile>>,
     on_send: Callback<()>,
     on_stop: Callback<()>,
 ) -> Element {
@@ -561,9 +598,37 @@ fn composer(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Stretch,
+                gap: px(8),
                 padding: (px(6), px(12), px(8), px(12)),
             ),
         ) {
+            // 送る前の添付ファイル。× で外せる。
+            View(
+                style: css!(
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    gap: px(6),
+                ),
+            ) {
+                ForEach(
+                    each: move || pending.get(),
+                    key: |f: &field_glass::PickedFile| f.path.clone(),
+                    children: move |f: ReadSignal<field_glass::PickedFile>| {
+                        let file = f.get_untracked();
+                        let path = file.path.clone();
+                        render! {
+                            AttachmentChip(
+                                name: file.name.clone(),
+                                on_remove: move |_| {
+                                    let _ = std::fs::remove_file(&path);
+                                    pending.update(|list| list.retain(|p| p.path != path));
+                                },
+                            )
+                        }
+                    },
+                )
+            }
             View(
                 style: css!(
                     display: Display::Flex,
@@ -571,12 +636,18 @@ fn composer(
                     align_items: AlignItems::Center,
                     gap: px(6),
                     min_height: px(50),
-                    padding: (px(5), px(7), px(5), px(18)),
+                    padding: (px(5), px(7), px(5), px(4)),
                     position: PositionKind::Relative,
                 ),
             ) {
                 // ガラスの丸い枠（iOS 26 のメッセージ入力欄の形）。
                 Glass(corner_radius: 25.0_f32, style: glass_fill())
+                AttachButton(
+                    on_pick: move |file: field_glass::PickedFile| {
+                        pending.update(|list| list.push(file))
+                    },
+                    style: css!(width: px(40), height: px(40), flex_shrink: 0.0),
+                )
                 Input(
                     text: draft,
                     placeholder: "Field Agent に頼む",
@@ -594,7 +665,9 @@ fn composer(
                 View(
                     style: computed(move || {
                         let busy = sending.get();
-                        let ready = busy || !draft.with(|d| d.trim().is_empty());
+                        let ready = busy
+                            || !draft.with(|d| d.trim().is_empty())
+                            || pending.with(|p| !p.is_empty());
                         css!(
                             width: px(36),
                             height: px(36),
@@ -750,6 +823,62 @@ fn user_bubble(text: Signal<String>) -> Element {
             }
         }
     }
+}
+
+/// 入力欄の上に並ぶ、送る前の添付ファイル 1 つ。
+#[component]
+fn attachment_chip(name: String, on_remove: Callback<()>) -> Element {
+    let label = format!("📎 {name}");
+    render! {
+        View(
+            style: css!(
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                gap: px(6),
+                max_width: px(240),
+                padding: (px(6), px(6), px(6), px(12)),
+                border_radius: px(16),
+                background_color: hex(FILL),
+            ),
+        ) {
+            Text(
+                value: label.clone(),
+                max_lines: 1u32,
+                style: css!(
+                    color: hex(LABEL),
+                    font_size: px(14),
+                    flex_shrink: 1.0,
+                    text_overflow: TextOverflow::Ellipsis,
+                ),
+            )
+            View(
+                on_tap: move |_| on_remove.run(()),
+                style: css!(
+                    width: px(22),
+                    height: px(22),
+                    border_radius: px(11),
+                    display: Display::Flex,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    background_color: hex(SECONDARY_LABEL),
+                ),
+            ) {
+                Text(value: "✕", style: css!(color: hex(FILL), font_size: px(11), font_weight: FontWeight::Bold))
+            }
+        }
+    }
+}
+
+/// リフレッシュトークンでアクセストークンを取り直す。取り直せたら画面にも知らせる。
+fn renew(send: &impl Fn(AgentEvent)) -> Option<String> {
+    let refresh_token = storage::refresh_token()?;
+    let renewed = api::refresh(&refresh_token).ok()?;
+    if let Some(rotated) = &renewed.refresh_token {
+        storage::save_refresh_token(rotated);
+    }
+    send(AgentEvent::Renewed(renewed.access_token.clone()));
+    Some(renewed.access_token)
 }
 
 /// Agent の返事：吹き出しなしで、画面の幅いっぱいの文。見出し・太字・箇条書き・表などを飾る。
