@@ -34,6 +34,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_record_list_schema::element_provider(),
             native_keyboard_observer_schema::element_provider(),
             native_appearance_observer_schema::element_provider(),
+            native_nav_bar_schema::element_provider(),
             native_sheet_schema::element_provider(),
             native_backdrop_schema::element_provider(),
         ],
@@ -310,6 +311,60 @@ pub fn appearance_observer(on_change: Callback<bool>) -> Element {
 pub fn appearance_observer(on_change: Callback<bool>) -> Element {
     on_change.run(false);
     render! { View() }
+}
+
+/// 上の帯のボタンが押されたときの知らせ。`detail.which` は "back" / "menu" / "action"。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct NavPressEvent {
+    #[serde(default)]
+    pub detail: NavPressDetail,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct NavPressDetail {
+    #[serde(default)]
+    pub which: String,
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:NavBar", measurement = None)]
+pub fn native_nav_bar(
+    title: Signal<String>,
+    back: Signal<String>,
+    menu: Signal<bool>,
+    action: Signal<String>,
+    style: Style,
+    on_press: NavPressEvent,
+) {
+}
+
+/// 画面の上の帯。iOS 標準の UINavigationBar（設定アプリなどと同じ帯）。iOS 専用。
+///
+/// - `title` … 真ん中の題名（空なら出さない）
+/// - `back` … 戻る先の名前。空でなければ左に iOS の「‹ 名前」の戻るボタンを出す
+/// - `menu` … true なら左に「☰」を出す（戻るボタンがあるときは出さない）
+/// - `action` … 右のボタンの文字（空なら出さない）
+/// - `on_press` … ボタンが押されたら "back" / "menu" / "action" で呼ばれる
+#[cfg(target_os = "ios")]
+#[component]
+pub fn nav_bar(
+    title: String,
+    back: String,
+    menu: bool,
+    action: String,
+    on_press: Callback<String>,
+    style: Style,
+) -> Element {
+    NativeNavBar::builder()
+        .title(title.clone())
+        .back(back.clone())
+        .menu(menu)
+        .action(action.clone())
+        .style(style.clone())
+        .on_press(move |e: NavPressEvent| on_press.run(e.detail.which))
+        .build()
 }
 
 #[doc(hidden)]

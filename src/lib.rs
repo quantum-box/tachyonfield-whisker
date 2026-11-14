@@ -17,8 +17,8 @@ use features::{Feature, MENU};
 use field_glass::{AppearanceObserver, Backdrop, Glass, KeyboardObserver};
 #[cfg(target_os = "ios")]
 use field_glass::{
-    MenuList as SystemMenuList, RecordList as SystemRecordList, Sheet as SystemSheet,
-    TabBar as SystemTabBar,
+    MenuList as SystemMenuList, NavBar as SystemNavBar, RecordList as SystemRecordList,
+    Sheet as SystemSheet, TabBar as SystemTabBar,
 };
 use serde_json::Value;
 use whisker::css::{
@@ -1944,7 +1944,45 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
 
 // ---------------------------------------------------------------- 部品
 
-/// 画面上部のバー。左に「☰」か青い「‹ 戻る」、真ん中に題名、右に青い文字のボタン。空文字なら出さない。
+/// 画面の上の帯。iOS は iOS 標準の帯（UINavigationBar）で、題名・戻るボタン・右のボタンを iOS が描く。
+/// 戻る先が無い画面では、左に裏のメニューを開く「☰」を出す。
+#[cfg(target_os = "ios")]
+#[component]
+fn nav_bar(
+    title: &'static str,
+    back_label: &'static str,
+    on_back: Callback<()>,
+    action_label: &'static str,
+    on_action: Callback<()>,
+) -> Element {
+    let drawer = if back_label.is_empty() {
+        use_context::<Drawer>()
+    } else {
+        None
+    };
+    render! {
+        SystemNavBar(
+            title: title.to_owned(),
+            back: back_label.to_owned(),
+            menu: drawer.is_some(),
+            action: action_label.to_owned(),
+            on_press: move |which: String| match which.as_str() {
+                "back" => on_back.call(),
+                "menu" => {
+                    if let Some(Drawer(open)) = drawer {
+                        open.set(true);
+                    }
+                }
+                "action" => on_action.call(),
+                _ => {}
+            },
+            style: css!(height: px(54), flex_shrink: 0.0),
+        )
+    }
+}
+
+/// 画面上部のバー（iOS 以外）。左に「☰」か青い「‹ 戻る」、真ん中に題名、右に青い文字のボタン。空文字なら出さない。
+#[cfg(not(target_os = "ios"))]
 #[component]
 fn nav_bar(
     title: &'static str,
@@ -2307,6 +2345,7 @@ fn sign_out(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) {
 
 /// iOS の「角丸グループ」：枠線なしの白い角丸。左右 16pt あける。
 /// 「☰」の 1 本の線。
+#[cfg(not(target_os = "ios"))]
 fn menu_bar_style() -> Css {
     css!(
         width: px(16),
