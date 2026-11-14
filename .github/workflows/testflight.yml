@@ -1,4 +1,6 @@
 # Builds the iOS app and uploads it to TestFlight.
+# Runs on every merge to main (docs-only changes are skipped), on v* tags,
+# and by hand.
 #
 # Needs, once:
 # - `credentials/` committed: run `whisker credential ios` locally (App Store
@@ -10,8 +12,12 @@ name: TestFlight
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths-ignore:
+      - "**.md"
 
 permissions:
   contents: read
