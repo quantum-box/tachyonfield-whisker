@@ -33,6 +33,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_menu_list_schema::element_provider(),
             native_record_list_schema::element_provider(),
             native_keyboard_observer_schema::element_provider(),
+            native_appearance_observer_schema::element_provider(),
             native_sheet_schema::element_provider(),
             native_backdrop_schema::element_provider(),
         ],
@@ -270,6 +271,44 @@ pub fn keyboard_observer(on_change: Callback<f32>) -> Element {
 #[component]
 pub fn keyboard_observer(on_change: Callback<f32>) -> Element {
     let _ = on_change;
+    render! { View() }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct AppearanceEvent {
+    #[serde(default)]
+    pub detail: AppearanceDetail,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct AppearanceDetail {
+    /// 暗い表示なら 1、明るい表示なら 0。
+    #[serde(default)]
+    pub dark: f64,
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:AppearanceObserver", measurement = None)]
+pub fn native_appearance_observer(style: Style, on_change: AppearanceEvent) {}
+
+/// 見えない部品。iPhone が暗い表示（ダークモード）かどうかを、置かれたときと
+/// 切り替わるたびに知らせる（暗いなら true）。iOS 以外はすぐに false を 1 回だけ知らせる。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn appearance_observer(on_change: Callback<bool>) -> Element {
+    use whisker::css::PositionKind;
+    NativeAppearanceObserver::builder()
+        .style(css!(position: PositionKind::Absolute, width: px(0), height: px(0)))
+        .on_change(move |e: AppearanceEvent| on_change.run(e.detail.dark > 0.5))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn appearance_observer(on_change: Callback<bool>) -> Element {
+    on_change.run(false);
     render! { View() }
 }
 

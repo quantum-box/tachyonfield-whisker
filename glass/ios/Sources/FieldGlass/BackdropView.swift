@@ -34,7 +34,12 @@ private final class BackdropHost: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1)
+        // 暗い表示では、ほぼ黒の地に色の光をにじませる。
+        backgroundColor = UIColor { trait in
+            trait.userInterfaceStyle == .dark
+                ? UIColor(red: 0.04, green: 0.04, blue: 0.06, alpha: 1)
+                : UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1)
+        }
         clipsToBounds = true
         isUserInteractionEnabled = false
         for orb in orbs {
