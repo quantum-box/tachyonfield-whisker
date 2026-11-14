@@ -481,6 +481,17 @@ fn tenant_picker(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant
 #[derive(Clone, Copy)]
 struct Drawer(RwSignal<bool>);
 
+/// 詳細画面を開いている間、左から右へ引くと一覧へ戻る。
+/// `target` は戻る先（詳細を閉じるために空にする選択）、`drag` は今引いている幅。
+#[derive(Clone, Copy)]
+struct BackSwipe {
+    target: RwSignal<Option<RwSignal<Option<Value>>>>,
+    drag: RwSignal<Option<f32>>,
+}
+
+/// これより右へ引いて離したら戻る。足りなければ元の位置に戻す。
+const BACK_DISTANCE: f32 = 90.0;
+
 /// 裏のメニューの幅。表の画面はこの分だけ右にずれる。
 const DRAWER_WIDTH: f32 = 300.0;
 /// 指がこれだけ動くまでは、横に引いたのか縦にスクロールしたのか決めない。
@@ -522,6 +533,11 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
     // 指を置いた位置（x, y）と、そのときの表の画面の位置。
     let start = signal(None::<(f32, f32, f32)>);
     provide_context(Drawer(open));
+    let back = BackSwipe {
+        target: signal(None),
+        drag: signal(None),
+    };
+    provide_context(back);
     let insets = safe_area_insets();
 
     let offset = computed(move || {
@@ -532,7 +548,15 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
         if let Some(x) = drag.get_untracked() {
             open.set(x > DRAWER_WIDTH / 2.0);
         }
+        if let Some(dx) = back.drag.get_untracked() {
+            if dx > BACK_DISTANCE {
+                if let Some(selected) = back.target.get_untracked() {
+                    selected.set(None);
+                }
+            }
+        }
         drag.set(None);
+        back.drag.set(None);
         start.set(None);
     };
 
@@ -587,6 +611,10 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                         return;
                     };
                     let dx = e.detail.x as f32 - x0;
+                    if back.drag.get_untracked().is_some() {
+                        back.drag.set(Some(dx.max(0.0)));
+                        return;
+                    }
                     if drag.get_untracked().is_none() {
                         let dy = e.detail.y as f32 - y0;
                         // 少し動いただけ（タップ）は、まだ決めない。
@@ -596,6 +624,11 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                         // 縦の動きが勝つならスクロールに任せる。閉じているときに右から左へ引いたのも無視する。
                         if dy.abs() > dx.abs() || (!open.get_untracked() && dx < 0.0) {
                             start.set(None);
+                            return;
+                        }
+                        // 詳細画面では、メニューではなく一覧へ戻る。
+                        if !open.get_untracked() && back.target.get_untracked().is_some() {
+                            back.drag.set(Some(dx));
                             return;
                         }
                     }
@@ -1449,6 +1482,14 @@ fn item_detail(
 ) -> Element {
     let record = signal(selected.get_untracked().unwrap_or_default());
     let version = signal(0_usize);
+    let back = use_context::<BackSwipe>();
+    if let Some(back) = back {
+        back.target.set(Some(selected));
+        on_cleanup(move || {
+            back.target.set(None);
+            back.drag.set(None);
+        });
+    }
     if let (Some(template), Some(current)) = (feature.detail_path, tenant.get_untracked()) {
         let id = features::id(&record.get_untracked());
         if !id.is_empty() {
@@ -1468,13 +1509,35 @@ fn item_detail(
         }
     }
     render! {
-        ForEach(
-            each: move || vec![version.get()],
-            key: |v: &usize| *v,
-            children: move |_: ReadSignal<usize>| render! {
-                DetailBody(feature: feature, item: record.get_untracked(), selected: selected)
-            },
-        )
+        // 左から右へ引いている間は、指について右へずれる。
+        View(
+            style: computed(move || {
+                let dx = back.and_then(|b| b.drag.get());
+                let x = dx.unwrap_or(0.0);
+                let shadow = if x > 0.0 { 0.18 } else { 0.0 };
+                let s = screen_style()
+                    .background_color(Color::hex(SYSTEM_BACKGROUND))
+                    .transform(TransformFn::TranslateX(px(x).into()))
+                    .box_shadow(px(0), px(0), px(24), px(0), Color::rgba(0, 0, 0, shadow));
+                if dx.is_some() {
+                    s
+                } else {
+                    s.transition(
+                        Transition::new(TransitionPropertyKind::name("transform"))
+                            .duration(ms(220))
+                            .timing(EasingFunction::EaseOut),
+                    )
+                }
+            }),
+        ) {
+            ForEach(
+                each: move || vec![version.get()],
+                key: |v: &usize| *v,
+                children: move |_: ReadSignal<usize>| render! {
+                    DetailBody(feature: feature, item: record.get_untracked(), selected: selected)
+                },
+            )
+        }
     }
 }
 
