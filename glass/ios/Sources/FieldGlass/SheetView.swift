@@ -6,6 +6,7 @@
 // - open     … true の間シートを出す
 // - title    … シート上部の題名
 // - sections … 一覧の JSON（形は `MenuListView.swift` と同じ）
+// - search   … 検索欄の「例」の文字。空なら検索欄を出さない
 // Rust へ知らせるもの：
 // - "select"  { key } … 行が押された（閉じるかどうかは Rust が `open` で決める）
 // - "dismiss" {}      … 下へ引っ張る・「閉じる」で、利用者がシートを閉じた
@@ -22,6 +23,10 @@ private final class SheetListController: UITableViewController, UISearchResultsU
     var onClose: (() -> Void)?
     private var allSections: [MenuSection] = []
     private let search = UISearchController(searchResultsController: nil)
+    /// 検索欄の「例」の文字。空なら検索欄を出さない。
+    var searchPlaceholder = "" {
+        didSet { if isViewLoaded { applySearch() } }
+    }
 
     /// Rust から届いた一覧を受け取り、今の検索語で絞り直す。
     func setSections(_ json: String) {
@@ -56,6 +61,18 @@ private final class SheetListController: UITableViewController, UISearchResultsU
         if isViewLoaded { tableView.reloadData() }
     }
 
+    /// 検索欄を出す・消す。消すときは打ちかけの語も消して、一覧を全部に戻す。
+    private func applySearch() {
+        if searchPlaceholder.isEmpty {
+            search.searchBar.text = ""
+            navigationItem.searchController = nil
+            applyFilter()
+        } else {
+            search.searchBar.placeholder = searchPlaceholder
+            navigationItem.searchController = search
+        }
+    }
+
     init() {
         super.init(style: .insetGrouped)
     }
@@ -68,14 +85,13 @@ private final class SheetListController: UITableViewController, UISearchResultsU
         search.searchResultsUpdater = self
         search.obscuresBackgroundDuringPresentation = false
         search.hidesNavigationBarDuringPresentation = false
-        search.searchBar.placeholder = "会社を検索"
         search.searchBar.delegate = self
-        navigationItem.searchController = search
         navigationItem.hidesSearchBarWhenScrolling = false
         if #available(iOS 16.0, *) {
             navigationItem.preferredSearchBarPlacement = .stacked
         }
         definesPresentationContext = true
+        applySearch()
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             systemItem: .close,
             primaryAction: UIAction { [weak self] _ in self?.onClose?() })
@@ -87,6 +103,7 @@ public final class FieldSheetView: WhiskerUI<UIView>, UIAdaptivePresentationCont
     private var isOpen = false
     private var sheetTitle = ""
     private var sectionsJSON = "[]"
+    private var searchPlaceholder = ""
     private weak var presented: UINavigationController?
     private weak var list: SheetListController?
 
@@ -116,6 +133,11 @@ public final class FieldSheetView: WhiskerUI<UIView>, UIAdaptivePresentationCont
         list?.setSections(json)
     }
 
+    func setSearch(_ placeholder: String) {
+        searchPlaceholder = placeholder
+        list?.searchPlaceholder = placeholder
+    }
+
     private func sync() {
         if isOpen { show() } else { close(animated: true) }
     }
@@ -126,6 +148,7 @@ public final class FieldSheetView: WhiskerUI<UIView>, UIAdaptivePresentationCont
         }
         let list = SheetListController()
         list.title = sheetTitle
+        list.searchPlaceholder = searchPlaceholder
         list.setSections(sectionsJSON)
         list.model.onSelect = { [weak self] key in
             guard let self else { return }

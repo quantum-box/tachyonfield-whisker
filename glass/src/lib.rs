@@ -318,6 +318,7 @@ pub fn native_sheet(
     open: Signal<bool>,
     title: Signal<String>,
     sections: Signal<String>,
+    search: Signal<String>,
     style: Style,
     on_select: MenuSelectEvent,
     on_dismiss: (),
@@ -327,23 +328,27 @@ pub fn native_sheet(
 /// 下から出る iOS 標準のシート。中身は設定アプリ風の一覧。iOS 専用。
 ///
 /// - `open` … true の間シートを出す。false にすると閉じる
+/// - `title` … シートの上の題（中身を差し替えるときは題も変えられる）
 /// - `sections` … 一覧の JSON（形は `MenuList` と同じ）
+/// - `search` … 検索欄の「例」の文字（空なら検索欄を出さない）
 /// - `on_select` … 行が押されたら、その行の `key` で呼ばれる（閉じるのは呼ぶ側が `open` で）
 /// - `on_dismiss` … 利用者が引っ張る・「閉じる」で閉じたとき
 #[cfg(target_os = "ios")]
 #[component]
 pub fn sheet(
     open: Signal<bool>,
-    title: &'static str,
+    title: Signal<String>,
     sections: Signal<String>,
+    search: Signal<String>,
     on_select: Callback<String>,
     on_dismiss: Callback<()>,
 ) -> Element {
     use whisker::css::PositionKind;
     NativeSheet::builder()
         .open(open)
-        .title(title.to_string())
+        .title(title)
         .sections(sections)
+        .search(search)
         .style(css!(position: PositionKind::Absolute, width: px(0), height: px(0)))
         .on_select(move |e: MenuSelectEvent| on_select.run(e.detail.key))
         .on_dismiss(move || on_dismiss.run(()))

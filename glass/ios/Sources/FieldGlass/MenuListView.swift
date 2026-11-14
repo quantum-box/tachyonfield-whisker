@@ -1,11 +1,14 @@
-// iOS 標準の一覧（UITableView の insetGrouped）。設定アプリと同じ見た目・押し心地。
+// 裏のメニューの一覧（UITableView）。チャットアプリの横から出るメニューのような、
+// 線のアイコンと文字だけの行。今いる行は灰色の角丸の帯で示す。
 //
 // Rust からは `sections` を JSON の文字で受け取る：
 //   [{ "title": "販売管理",
 //      "rows": [{ "key": "案件", "title": "案件", "subtitle": "…", "symbol": "briefcase.fill",
 //                 "color": "#007AFF", "accessory": "chevron", "destructive": false }] }]
-// - symbol … SF Symbols の名前。色付きの角丸の四角に白で描く（空ならアイコンなし）
+// - symbol … SF Symbols の名前。シートでは色付きの角丸の四角に白で、
+//   裏のメニューでは文字と同じ色の線で描く（空ならアイコンなし）
 // - accessory … 右端の印。"chevron"（›、既定）/ "check"（✓）/ "expand"（⌄）/ "collapse"（⌃）/ "none"
+//   裏のメニューでは "check" の行を「今いる行」として灰色の帯で囲み、印は出さない
 // - destructive … true なら赤字で印なし（サインアウトなど）
 // 行が押されたら "select" を { key } 付きで Rust に知らせる。
 //
@@ -18,10 +21,15 @@ import WhiskerModule
 /// 一覧を入れる箱。Whisker の入れ物に直接置くと UIKit の部品が中身を並べ直さないので、
 /// 大きさが決まるたびに一覧の大きさを付け直す。
 private final class MenuListHost: UIView {
-    let table = UITableView(frame: .zero, style: .insetGrouped)
+    let table = UITableView(frame: .zero, style: .plain)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // 背景は透かして、裏のメニューの地の色（Rust 側）を見せる。
+        table.backgroundColor = .clear
+        table.separatorStyle = .none
+        table.sectionHeaderTopPadding = 0
+        table.rowHeight = 52
         addSubview(table)
     }
 
@@ -52,6 +60,8 @@ struct MenuSection {
 final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate {
     var sections: [MenuSection] = []
     var onSelect: ((String) -> Void)?
+    /// true なら裏のメニューの見た目（線のアイコン・灰色の帯）。false はシートの見た目（設定アプリ風）。
+    var sidebar = false
     private let swipeGuard = SwipeGuard()
 
     func attach(to table: UITableView) {
@@ -74,13 +84,44 @@ final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate
     }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        if sidebar { return nil }
         let title = sections[section].title
         return title.isEmpty ? nil : title
+    }
+
+    /// 裏のメニューの見出し：小さな灰色の文字だけ（帯や地の色は付けない）。
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        guard sidebar else { return nil }
+        let title = sections[section].title
+        let view = UIView()
+        guard !title.isEmpty else { return view }
+        let label = UILabel()
+        label.text = title
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = .secondaryLabel
+        label.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            label.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -6),
+        ])
+        return view
+    }
+
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        guard sidebar else { return UITableView.automaticDimension }
+        return sections[section].title.isEmpty ? 12 : 36
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let row = sections[indexPath.section].rows[indexPath.row]
         let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
+        if sidebar {
+            configureSidebar(cell, row: row)
+            return cell
+        }
+        cell.configurationUpdateHandler = nil
+        cell.backgroundConfiguration = nil
         var content = row.subtitle.isEmpty
             ? cell.defaultContentConfiguration() : UIListContentConfiguration.subtitleCell()
         content.text = row.title
@@ -110,6 +151,45 @@ final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate
         }
         cell.contentConfiguration = content
         return cell
+    }
+
+    /// 裏のメニューの行：線のアイコンと文字。今いる行と、押している間は灰色の角丸の帯。
+    private func configureSidebar(_ cell: UITableViewCell, row: MenuRow) {
+        var content = cell.defaultContentConfiguration()
+        content.text = row.title
+        content.textProperties.font = .systemFont(ofSize: 17)
+        content.textProperties.color = row.destructive ? .systemRed : .label
+        content.textProperties.numberOfLines = 1
+        if !row.symbol.isEmpty {
+            content.image = UIImage(
+                systemName: row.symbol,
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular))
+            content.imageProperties.tintColor = row.destructive ? .systemRed : .label
+            content.imageProperties.reservedLayoutSize = CGSize(width: 28, height: 28)
+            content.imageToTextPadding = 16
+        }
+        content.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 28, bottom: 0, trailing: 20)
+        cell.contentConfiguration = content
+        cell.accessoryView = nil
+        cell.accessoryType = .none
+        cell.selectionStyle = .none
+        let current = row.accessory == "check"
+        cell.configurationUpdateHandler = { cell, state in
+            var background = UIBackgroundConfiguration.clear()
+            if current || state.isHighlighted {
+                background.backgroundColor = Self.pill
+            }
+            background.cornerRadius = 22
+            background.backgroundInsets = NSDirectionalEdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12)
+            cell.backgroundConfiguration = background
+        }
+    }
+
+    /// 今いる行の帯の色（明るい表示・暗い表示）。
+    private static let pill = UIColor { trait in
+        trait.userInterfaceStyle == .dark
+            ? UIColor(red: 0.23, green: 0.23, blue: 0.24, alpha: 1)
+            : UIColor(red: 0.93, green: 0.93, blue: 0.95, alpha: 1)
     }
 
     func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
@@ -177,6 +257,7 @@ public final class FieldMenuListView: WhiskerUI<UIView> {
 
     private lazy var host: MenuListHost = {
         let host = MenuListHost()
+        model.sidebar = true
         model.attach(to: host.table)
         model.onSelect = { [weak self] key in
             guard let self else { return }
