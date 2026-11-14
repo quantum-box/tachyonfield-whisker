@@ -1,4 +1,5 @@
 use whisker_cng::AppIcon;
+use whisker_cng::plugins::info_plist_extra::InfoPlistExtra;
 
 fn main() {
     // CI sets BUILD_NUMBER (the workflow run number) so every TestFlight
@@ -24,6 +25,12 @@ fn main() {
         // App Store needs an icon; actool derives every size from this 1024×1024 PNG.
         app.plugin::<AppIcon>(|c| {
             c.source("assets/icon.png");
+        });
+
+        // Export compliance: the app only uses standard encryption (HTTPS) and
+        // needs no export documents, so TestFlight stops asking on every build.
+        app.plugin::<InfoPlistExtra>(|c| {
+            c.add("ITSAppUsesNonExemptEncryption", "NO");
         });
 
         app.android(|a| {
