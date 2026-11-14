@@ -14,6 +14,9 @@ use whisker::runtime::view::observe_layout;
 use whisker::{ElementHandle, ScrollViewHandle};
 
 use super::*;
+
+/// Agent の印（✦）の色。Apple Intelligence の紫寄りの色。
+const PURPLE: u32 = 0x8E5CF7;
 use api::AgentEvent;
 
 /// 会話の 1 行の種類。
@@ -422,8 +425,28 @@ pub fn agent_screen(
             })
     });
 
+    let insets = safe_area_insets();
+    let empty = computed(move || messages.with(Vec::is_empty));
+
     render! {
-        View(style: screen_style()) {
+        View(style: screen_style().position(PositionKind::Relative)) {
+            // 会話を始める前だけ、ログイン画面と同じ淡い光を薄く敷く（Apple Intelligence の画面の雰囲気）。
+            Show(when: move || empty.get()) {
+                View(
+                    style: computed(move || {
+                        css!(
+                            position: PositionKind::Absolute,
+                            top: px(-(insets.get().top as f32)),
+                            bottom: px(0),
+                            left: px(0),
+                            right: px(0),
+                            opacity: 0.6,
+                        )
+                    }),
+                ) {
+                    Backdrop(style: glass_fill())
+                }
+            }
             NavBar(
                 title: "Field Agent",
                 back_label: "",
@@ -440,11 +463,19 @@ pub fn agent_screen(
             ScrollView(style: scroll_style(), element_ref: scroller.r()) {
                 View(
                     element_ref: content.r(),
-                    style: scroll_content_style()
-                        .padding((px(8), px(20), px(20), px(20)))
-                        .gap(px(14)),
+                    style: computed(move || {
+                        // 会話が空のときは、案内を画面の真ん中に置く。
+                        let base = scroll_content_style()
+                            .padding((px(8), px(20), px(20), px(20)))
+                            .gap(px(14));
+                        if empty.get() {
+                            base.flex_grow(1.0).justify_content(JustifyContent::Center)
+                        } else {
+                            base
+                        }
+                    }),
                 ) {
-                    Show(when: move || messages.with(Vec::is_empty)) {
+                    Show(when: move || empty.get()) {
                         AgentWelcome(
                             on_pick: move |text: String| {
                                 draft.set(text);
@@ -497,10 +528,20 @@ pub fn agent_screen(
                         },
                     )
                     Show(when: move || thinking.get()) {
-                        Text(
-                            value: "考えています…",
-                            style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(15)),
-                        )
+                        View(
+                            style: css!(
+                                display: Display::Flex,
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                gap: px(6),
+                            ),
+                        ) {
+                            Text(value: "✦", style: css!(color: Color::hex(PURPLE), font_size: px(15)))
+                            Text(
+                                value: "考えています…",
+                                style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(15)),
+                            )
+                        }
                     }
                 }
             }
@@ -546,13 +587,13 @@ fn composer(
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     gap: px(6),
-                    min_height: px(48),
-                    padding: (px(4), px(6), px(4), px(16)),
-                    border_radius: px(24),
-                    background_color: Color::hex(0xFFFFFF),
-                    border: hairline(),
+                    min_height: px(50),
+                    padding: (px(5), px(7), px(5), px(18)),
+                    position: PositionKind::Relative,
                 ),
             ) {
+                // ガラスの丸い枠（iOS 26 のメッセージ入力欄の形）。
+                Glass(corner_radius: 25.0_f32, style: glass_fill())
                 Input(
                     text: draft,
                     placeholder: "Field Agent に頼む",
@@ -564,6 +605,7 @@ fn composer(
                         height: px(40),
                         font_size: px(17),
                         color: Color::hex(LABEL),
+                        background_color: Color::rgba(0, 0, 0, 0.0),
                     ),
                 )
                 View(
@@ -609,7 +651,7 @@ fn composer(
     }
 }
 
-/// 会話が空のときの案内と、すぐ送れる例。
+/// 会話が空のときの案内と、すぐ送れる例。真ん中寄せで、例はガラスの丸い札。
 #[component]
 fn agent_welcome(on_pick: Callback<String>) -> Element {
     const EXAMPLES: &[&str] = &[
@@ -622,44 +664,82 @@ fn agent_welcome(on_pick: Callback<String>) -> Element {
             style: css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
-                gap: px(10),
-                padding: (px(32), px(0), px(8), px(0)),
+                align_items: AlignItems::Center,
+                gap: px(8),
+                padding_bottom: px(24),
             ),
         ) {
-            Text(value: "✦", style: css!(color: Color::hex(TINT), font_size: px(32)))
+            View(
+                style: css!(
+                    width: px(72),
+                    height: px(72),
+                    position: PositionKind::Relative,
+                    display: Display::Flex,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    margin_bottom: px(12),
+                ),
+            ) {
+                Glass(corner_radius: 36.0_f32, style: glass_fill())
+                Text(value: "✦", style: css!(color: Color::hex(PURPLE), font_size: px(34)))
+            }
             Text(
                 value: "何をしましょう？",
-                style: css!(color: Color::hex(LABEL), font_size: px(26), font_weight: FontWeight::Bold),
+                style: css!(color: Color::hex(LABEL), font_size: px(28), font_weight: FontWeight::Bold),
             )
             Text(
                 value: "Field のデータについて聞いたり、作業を頼んだりできます。",
-                style: css!(color: Color::hex(SECONDARY_LABEL), font_size: px(16)),
+                style: css!(
+                    color: Color::rgba(60, 60, 67, 0.6),
+                    font_size: px(16),
+                    text_align: TextAlign::Center,
+                ),
             )
-            View(style: css!(height: px(8)))
-            ForEach(
-                each: || EXAMPLES.to_vec(),
-                key: |e: &&'static str| *e,
-                children: move |e: ReadSignal<&'static str>| {
-                    let example = e.get_untracked();
-                    render! {
-                        View(
-                            style: css!(
-                                padding: (px(12), px(16)),
-                                border_radius: px(14),
-                                background_color: Color::hex(0xF2F2F7),
-                            ),
-                            on_tap: move |_| on_pick.run(example.to_owned()),
-                        ) {
-                            Text(
-                                value: example,
-                                style: css!(color: Color::hex(LABEL), font_size: px(15)),
-                            )
+            View(style: css!(height: px(20)))
+            View(
+                style: css!(
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    gap: px(10),
+                ),
+            ) {
+                ForEach(
+                    each: || EXAMPLES.to_vec(),
+                    key: |e: &&'static str| *e,
+                    children: move |e: ReadSignal<&'static str>| {
+                        let example = e.get_untracked();
+                        render! {
+                            View(
+                                style: css!(
+                                    position: PositionKind::Relative,
+                                    padding: (px(11), px(18)),
+                                ),
+                                on_tap: move |_| on_pick.run(example.to_owned()),
+                            ) {
+                                Glass(corner_radius: 21.0_f32, style: glass_fill())
+                                Text(
+                                    value: example,
+                                    style: css!(color: Color::hex(LABEL), font_size: px(15)),
+                                )
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                )
+            }
         }
     }
+}
+
+/// ガラスや背景の絵を、親いっぱいに敷くときの置き方。
+fn glass_fill() -> Css {
+    css!(
+        position: PositionKind::Absolute,
+        top: px(0),
+        bottom: px(0),
+        left: px(0),
+        right: px(0),
+    )
 }
 
 /// 自分の発言：右に青い吹き出し。
