@@ -68,6 +68,7 @@ public final class GlassModule: Module {
                 }
                 Events("select", "dismiss")
             }
+            View("field-glass:Backdrop", FieldBackdropView.self) {}
             View("field-glass:KeyboardObserver", FieldKeyboardObserverView.self) {
                 Events("change")
             }
