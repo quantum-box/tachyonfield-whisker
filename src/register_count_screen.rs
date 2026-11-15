@@ -331,7 +331,8 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
     load_books();
     on_cleanup(move || {
         // 画面ごと消えるので、画面の仕事ではなく別の糸で送る（読んだときの会社・帳簿へ）。
-        if sheet.dirty.get_untracked() && !sheet.saving.get_untracked() {
+        if sheet.dirty.get_untracked() {
+            // 保存の途中なら、その保存で版が進むのを待ってから新しい入力を送る。
             let (Some(day), Some(tenant), Some(book), Some(access)) = (
                 sheet.day.get_untracked(),
                 sheet.loaded_tenant.get_untracked(),
@@ -340,8 +341,15 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
             ) else {
                 return;
             };
-            let version = sheet.version.get_untracked();
+            let known = sheet.version.get_untracked();
+            let in_flight = sheet.saving.get_untracked();
             std::thread::spawn(move || {
+                let read = || {
+                    api::register_count_days(&access, &tenant, &day.date, &day.date, &book.id)
+                        .ok()
+                        .and_then(|v| v["items"].as_array().and_then(|i| i.iter().find(|x| x["date"] == day.date.as_str()).and_then(|x| x["version"].as_i64())))
+                };
+                let Some(version) = crate::cash_book_screen::settle_version(known, in_flight, read) else { return };
                 let _ = api::save_register_count_day(&access, &tenant, &day.date, &day.to_value(), version, &book.id);
             });
         }

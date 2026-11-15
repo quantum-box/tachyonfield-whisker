@@ -136,6 +136,25 @@ pub fn cash_book_page(day: &Day, _fallback: Option<&Template>, start: usize) -> 
             ));
         }
     }
+    // 設定に無い科目の行も、最後に出す（証番と同じ扱い。見える行と合計がそろうように）。
+    let mut extra: Vec<&str> = Vec::new();
+    for r in &grouped {
+        if !template.expenses.iter().any(|c| c.key == r.category) && !extra.contains(&r.category.as_str()) {
+            extra.push(&r.category);
+        }
+    }
+    for key in extra {
+        for (i, r) in grouped.iter().filter(|r| r.category == key).enumerate() {
+            rows.push_str(&format!(
+                "<tr><td class=\"c b\">{}</td><td class=\"num\">{}</td><td class=\"ell\">{}</td><td class=\"ell\">{}</td><td class=\"c\">{}</td></tr>",
+                if i == 0 { esc(key) } else { String::new() },
+                yen(r.amount),
+                esc(&r.payee),
+                esc(&r.description),
+                numbers.get(&r.id).map(|n| n.to_string()).unwrap_or_default(),
+            ));
+        }
+    }
     rows.push_str(&format!(
         "<tr><td class=\"c b\">③支出合計</td><td class=\"num b\">{}</td><td></td><td></td><td></td></tr>",
         cash::format_yen(spent)
@@ -354,6 +373,9 @@ mod tests {
         assert!(page.contains("③支出合計"));
         assert!(page.contains("13,800"));
         assert!(page.contains("現金預金"));
+        let mut odd = day.clone();
+        odd.expenses[0].category = "unknownKey".into();
+        assert!(cash_book_page(&odd, None, 1).contains("unknownKey"));
     }
 
     #[test]

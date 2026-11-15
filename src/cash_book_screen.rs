@@ -447,6 +447,27 @@ async fn save(
     result.unwrap_or_else(|message| Err(SaveError::Other(message)))
 }
 
+/// 画面を閉じたときの送り残しに使う版。保存の途中でなければ今の版。途中なら、その保存で
+/// 版が 1 つ進むのを待ってその版を使う（ほかの端末が保存していたら送らない）。
+pub(crate) fn settle_version(
+    known: Option<i64>,
+    in_flight: bool,
+    read: impl Fn() -> Option<i64>,
+) -> Option<Option<i64>> {
+    if !in_flight {
+        return Some(known);
+    }
+    let next = known.map_or(1, |v| v + 1);
+    for _ in 0..40 {
+        match read() {
+            Some(v) if v == next => return Some(Some(v)),
+            current if current == known => std::thread::sleep(Duration::from_millis(500)),
+            _ => return None,
+        }
+    }
+    None
+}
+
 async fn sleep(duration: Duration) {
     run_blocking(move || std::thread::sleep(duration)).await;
 }
@@ -552,16 +573,25 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
     on_cleanup(move || {
         alive.store(false, Ordering::Relaxed);
         // 閉じる前に、まだ送っていない入力を送る。
-        if ledger.dirty.get_untracked() && !ledger.saving.get_untracked() {
+        if ledger.dirty.get_untracked() {
             // 画面ごと消えるので、画面の仕事ではなく別の糸で送る。送り先は、この日を読んだときの会社・帳簿。
+            // 保存の途中なら、その保存が終わる（版が 1 つ進む）のを待ってから、新しい入力を送る。
             let (Some(day), Some(tenant), Some(access)) =
                 (ledger.day.get_untracked(), ledger.loaded_tenant.get_untracked(), token.get_untracked())
             else {
                 return;
             };
-            let version = ledger.version.get_untracked();
+            let known = ledger.version.get_untracked();
+            let in_flight = ledger.saving.get_untracked();
             let book_id = if ledger.legacy_origin.get_untracked() { None } else { ledger.loaded_book.get_untracked() };
             std::thread::spawn(move || {
+                let read = || {
+                    api::cash_book_days(&access, &tenant, &day.date, &day.date, book_id.as_deref())
+                        .ok()
+                        .and_then(|v| model::saved_days(&v, book_id.is_none()).into_iter().find(|d| d.day.date == day.date))
+                        .map(|d| d.version)
+                };
+                let Some(version) = settle_version(known, in_flight, read) else { return };
                 let _ = api::save_cash_book_day(&access, &tenant, &day.date, &day.to_value(), version, book_id.as_deref());
             });
         }
@@ -1294,5 +1324,24 @@ pub(crate) fn button(label: &'static str, on_tap: Callback<()>) -> Element {
                 ),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settle_version;
+    use std::cell::Cell;
+
+    #[test]
+    fn waits_for_the_in_flight_save_then_uses_its_version() {
+        assert_eq!(settle_version(Some(3), false, || None), Some(Some(3)));
+        let calls = Cell::new(0);
+        let read = || {
+            calls.set(calls.get() + 1);
+            if calls.get() < 2 { Some(3) } else { Some(4) }
+        };
+        assert_eq!(settle_version(Some(3), true, read), Some(Some(4)));
+        assert_eq!(settle_version(Some(3), true, || Some(7)), None);
+        assert_eq!(settle_version(None, true, || Some(1)), Some(Some(1)));
     }
 }
