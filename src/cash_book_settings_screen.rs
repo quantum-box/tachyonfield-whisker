@@ -13,18 +13,18 @@ use crate::cash_book_screen::*;
 use crate::cash_book_settings as rules;
 
 #[derive(Clone, Copy)]
-struct Editor {
-    token: RwSignal<Option<String>>,
-    tenant: RwSignal<Option<Tenant>>,
+pub(crate) struct Editor {
+    pub(crate) token: RwSignal<Option<String>>,
+    pub(crate) tenant: RwSignal<Option<Tenant>>,
     /// サーバーの設定（`{ data: { books }, version }`）。読むまでは `None`。
     settings: RwSignal<Option<Value>>,
     stores: RwSignal<Vec<Value>>,
     load_error: RwSignal<String>,
     /// 開いている帳簿の番号。一覧の数と同じなら新しい帳簿。
     index: RwSignal<Option<usize>>,
-    draft: RwSignal<Value>,
+    pub(crate) draft: RwSignal<Value>,
     /// 入力欄を作り直すたびに増やす（行を足した・消したとき）。
-    view: RwSignal<u64>,
+    pub(crate) view: RwSignal<u64>,
     saving: RwSignal<bool>,
     message: RwSignal<String>,
     /// 保存していない変更を捨てる前に、一度だけ知らせる。
@@ -91,7 +91,7 @@ impl Editor {
     }
 
     /// 下書きを直す。`rebuild` は行の数が変わったとき（入力欄を作り直す）。
-    fn edit(self, rebuild: bool, change: impl FnOnce(&mut Value)) {
+    pub(crate) fn edit(self, rebuild: bool, change: impl FnOnce(&mut Value)) {
         self.draft.update(change);
         self.warned.set(false);
         if rebuild {
@@ -314,6 +314,7 @@ fn book_list(editor: Editor) -> Element {
 /// 1 冊の帳簿の設定。
 #[component]
 fn book_editor(editor: Editor) -> Element {
+    let form = signal("cash");
     let is_new = computed(move || editor.is_new());
     let banasuku = computed(move || editor.draft.with(|d| d["template"]["preset"] == "banasuku"));
     let store_options = computed(move || {
@@ -377,7 +378,20 @@ fn book_editor(editor: Editor) -> Element {
                     editor.edit(true, |d| d["template"] = rules::configure_legacy(&d["template"]));
                 })
             }
-            TemplateEditor(editor: editor)
+            View(style: group_style().margin_top(px(12))) {
+                Choice(
+                    label: computed(|| "帳票".to_owned()),
+                    options: computed(|| vec![("cash".to_owned(), "現金出納帳".to_owned()), ("register".to_owned(), "レジ管理表".to_owned())]),
+                    selected: computed(move || form.get().to_owned()),
+                    on_pick: move |f: String| form.set(if f == "register" { "register" } else { "cash" }),
+                )
+            }
+            Show(when: move || form.get() == "cash") {
+                TemplateEditor(editor: editor)
+            }
+            Show(when: move || form.get() == "register") {
+                crate::register_count_settings::RegisterEditor(editor: editor)
+            }
             Show(when: move || !editor.message.with(String::is_empty)) {
                 Text(
                     value: computed(move || editor.message.get()),
@@ -480,12 +494,12 @@ fn template_editor(editor: Editor) -> Element {
             ProductLink(editor: editor, options: income_options)
 
             SectionHeader(title: computed(|| "会社別の印刷形式".to_owned()))
-            PrintEditor(editor: editor)
+            PrintEditor(editor: editor, base: "template")
         }
     }
 }
 
-fn rows_of(value: &Value) -> Vec<Value> {
+pub(crate) fn rows_of(value: &Value) -> Vec<Value> {
     value.as_array().cloned().unwrap_or_default()
 }
 
@@ -496,7 +510,7 @@ fn key_label(row: &Value) -> (String, String) {
     )
 }
 
-fn push(list: &mut Value, item: Value) {
+pub(crate) fn push(list: &mut Value, item: Value) {
     if !list.is_array() {
         *list = json!([]);
     }
@@ -505,7 +519,7 @@ fn push(list: &mut Value, item: Value) {
     }
 }
 
-fn remove_at(list: &mut Value, index: usize) {
+pub(crate) fn remove_at(list: &mut Value, index: usize) {
     if let Some(items) = list.as_array_mut() {
         if index < items.len() {
             items.remove(index);
@@ -771,18 +785,18 @@ fn product_link(editor: Editor, options: Signal<Vec<(String, String)>>) -> Eleme
 
 /// 印刷形式：表題・会社名・確認欄・備考・配置・日付・向き・文字サイズと、AI の案。
 #[component]
-fn print_editor(editor: Editor) -> Element {
+pub(crate) fn print_editor(editor: Editor, base: &'static str) -> Element {
     let print = move |key: &'static str| {
-        computed(move || editor.draft.with(|d| d["template"]["print"][key].as_str().unwrap_or("").to_owned()))
+        computed(move || editor.draft.with(|d| d[base]["print"][key].as_str().unwrap_or("").to_owned()))
     };
     let options = |pairs: &'static [(&'static str, &'static str)]| {
         computed(move || pairs.iter().map(|(k, l)| ((*k).to_owned(), (*l).to_owned())).collect::<Vec<_>>())
     };
     let set = move |key: &'static str| {
-        move |value: String| editor.edit(false, move |d| d["template"]["print"][key] = json!(value))
+        move |value: String| editor.edit(false, move |d| d[base]["print"][key] = json!(value))
     };
     let orientation = computed(move || {
-        editor.draft.with(|d| d["template"]["print"]["orientation"].as_str().unwrap_or("portrait").to_owned())
+        editor.draft.with(|d| d[base]["print"]["orientation"].as_str().unwrap_or("portrait").to_owned())
     });
     let instructions = signal(String::new());
     let reference = signal(None::<(String, String, bool)>); // (名前, base64, PDF か)
@@ -796,7 +810,7 @@ fn print_editor(editor: Editor) -> Element {
         let file = reference.get_untracked();
         if text.trim().is_empty() && file.is_none() { return; }
         let Some(tenant) = editor.tenant.get_untracked() else { return };
-        let current = editor.draft.with_untracked(|d| d["template"]["print"].clone());
+        let current = editor.draft.with_untracked(|d| d[base]["print"].clone());
         let document = file.map(|(_, data, pdf)| (data, if pdf { pdf_page.get_untracked().trim().parse::<u32>().ok() } else { None }));
         generating.set(true);
         ai_error.set(String::new());
@@ -818,12 +832,12 @@ fn print_editor(editor: Editor) -> Element {
                 each: move || vec![editor.view.get()],
                 key: |v: &u64| *v,
                 children: move |_v: ReadSignal<u64>| {
-                    let get = |key: &str| editor.draft.with_untracked(|d| d["template"]["print"][key].as_str().unwrap_or("").to_owned());
+                    let get = |key: &str| editor.draft.with_untracked(|d| d[base]["print"][key].as_str().unwrap_or("").to_owned());
                     let title = signal(get("title"));
                     let company = signal(get("companyName"));
                     let approval = signal(get("approvalLabel"));
                     let footer = signal(get("footer"));
-                    let size = editor.draft.with_untracked(|d| d["template"]["print"]["fontSize"].as_f64().map(|s| format!("{s}")).unwrap_or_default());
+                    let size = editor.draft.with_untracked(|d| d[base]["print"]["fontSize"].as_f64().map(|s| format!("{s}")).unwrap_or_default());
                     render! {
                         View(style: group_style()) {
                             TextRow(label: "表題", text: title, editable: true, on_text: set("title"))
@@ -831,7 +845,7 @@ fn print_editor(editor: Editor) -> Element {
                             TextRow(label: "確認欄", text: approval, editable: true, on_text: set("approvalLabel"))
                             TextRow(label: "備考", text: footer, editable: true, on_text: set("footer"))
                             NumberRow(label: "文字サイズ", initial: size, decimal: true, on_value: move |v: Option<f64>| editor.edit(false, |d| {
-                                d["template"]["print"]["fontSize"] = v.map_or(Value::Null, |v| json!(v));
+                                d[base]["print"]["fontSize"] = v.map_or(Value::Null, |v| json!(v));
                             }))
                         }
                     }
@@ -916,7 +930,7 @@ fn print_editor(editor: Editor) -> Element {
                 )
                 Button(label: "この案を採用", on_tap: move |_| {
                     if let Some(value) = suggestion.get_untracked() {
-                        editor.edit(true, |d| d["template"]["print"] = value);
+                        editor.edit(true, |d| d[base]["print"] = value);
                         suggestion.set(None);
                     }
                 })
@@ -991,7 +1005,7 @@ pub(crate) fn choice(
 
 /// 数を打つ欄（印刷行数・文字サイズ）。
 #[component]
-fn number_row(label: &'static str, initial: String, decimal: bool, on_value: Callback<Option<f64>>) -> Element {
+pub(crate) fn number_row(label: &'static str, initial: String, decimal: bool, on_value: Callback<Option<f64>>) -> Element {
     let text = signal(initial.clone());
     let input = InputRef::new();
     render! {
@@ -1029,7 +1043,7 @@ fn number_row(label: &'static str, initial: String, decimal: bool, on_value: Cal
 
 /// 赤い「削除」の行。
 #[component]
-fn remove_row(on_tap: Callback<()>) -> Element {
+pub(crate) fn remove_row(on_tap: Callback<()>) -> Element {
     render! {
         Text(
             value: "削除",

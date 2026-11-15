@@ -404,6 +404,87 @@ pub fn inventory_stores(token: &str, tenant: &Tenant) -> Result<Vec<Value>, Stri
     fetch_list(token, tenant, "/v1/field/inventory/stores", "items")
 }
 
+/// レジ管理表の日を読む（92 日まで）。返ってきた帳簿が頼んだものと違えば断る。
+pub fn register_count_days(
+    token: &str,
+    tenant: &Tenant,
+    from: &str,
+    to: &str,
+    book_id: &str,
+) -> Result<Value, String> {
+    let path = format!(
+        "/v1/field/register-counts/days?from={from}&to={to}&book_id={}",
+        encode_query(book_id)
+    );
+    let value = fetch_record(token, tenant, &path)?;
+    if value["bookId"].as_str() != Some(book_id) {
+        return Err(
+            "店舗・レジ別の記録を読み込めませんでした。しばらくしてから再読み込みしてください。".into(),
+        );
+    }
+    Ok(value)
+}
+
+/// レジ管理表の 1 日を保存し、新しい版を返す。
+pub fn save_register_count_day(
+    token: &str,
+    tenant: &Tenant,
+    date: &str,
+    data: &Value,
+    expected_version: Option<i64>,
+    book_id: &str,
+) -> Result<i64, SaveError> {
+    let body = json!({ "bookId": book_id, "data": data, "expectedVersion": expected_version });
+    let response = field_request(
+        "PUT",
+        &format!("/v1/field/register-counts/days/{date}"),
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .set("Content-Type", "application/json")
+    .send_json(body);
+    match response {
+        Ok(response) => {
+            let value: Value = response
+                .into_json()
+                .map_err(|e| SaveError::Other(format!("応答を読めません: {e}")))?;
+            value["version"]
+                .as_i64()
+                .ok_or_else(|| SaveError::Other("応答の形が想定と違います".into()))
+        }
+        Err(ureq::Error::Status(409, _)) => Err(SaveError::Conflict),
+        Err(error) => Err(SaveError::Other(describe_error(error))),
+    }
+}
+
+/// 売上台帳（確定済み、1 日分）。`receipt_id` を付けるとその伝票にひもづくものだけ。
+pub fn sales_ledger(token: &str, tenant: &Tenant, date: &str, receipt_id: &str) -> Result<Value, String> {
+    fetch_record(
+        token,
+        tenant,
+        &format!(
+            "/v1/sales-ledger?group_by=day&date_from={date}&date_to={date}&status=confirmed&receipt_id={}",
+            encode_query(receipt_id)
+        ),
+    )
+}
+
+/// 気象庁の予報（府県予報区ごとの JSON）。
+pub fn jma_forecast(office_code: &str) -> Result<Value, String> {
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .get(&format!(
+            "https://www.jma.go.jp/bosai/forecast/data/forecast/{}.json",
+            encode_query(office_code)
+        ))
+        .call()
+        .map_err(|_| "天気を取得できませんでした。".to_owned())?
+        .into_json()
+        .map_err(|_| "天気を取得できませんでした。".to_owned())
+}
+
 /// レシートを種類ごとに読む（アップロードした日の範囲。1 回 200 件まで）。`(一覧, 打ち切られたか)`。
 pub fn list_receipts(
     token: &str,

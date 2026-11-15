@@ -18,6 +18,10 @@ mod cash_book_settings;
 mod cash_book_settings_screen;
 mod features;
 mod markdown;
+mod register_count;
+mod register_count_import;
+mod register_count_screen;
+mod register_count_settings;
 mod storage;
 
 use agent::AgentScreen;
@@ -761,6 +765,11 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                     children: move |k: ReadSignal<(usize, usize)>| {
                         let (a, i) = k.get_untracked();
                         let feature = area_features(a)[i];
+                        if feature.path == features::REGISTER_COUNT.path {
+                            return render! {
+                                register_count_screen::RegisterCountScreen(token: token, tenant: tenant)
+                            };
+                        }
                         if feature.is_screen() {
                             return render! {
                                 cash_book_screen::CashBookScreen(token: token, tenant: tenant)
@@ -859,6 +868,7 @@ fn feature_symbol(label: &str) -> &'static str {
         "請求書" => "yensign",
         "経費" => "creditcard.fill",
         "現金出納帳" => "banknote.fill",
+        "レジ締め" => "dollarsign.arrow.circlepath",
         _ => "square.fill",
     }
 }

@@ -279,7 +279,16 @@ pub fn validate_book(book: &Value) -> Result<(), String> {
     if !book["registerName"].as_str().is_some_and(valid_label) {
         return Err("レジ名を入れてください（100文字まで）。".into());
     }
-    validate_template(&book["template"])
+    validate_template(&book["template"])?;
+    if !book["registerCount"].is_null() {
+        crate::register_count::validate_template(&book["registerCount"])?;
+        crate::cash_book_settings::validate_print_public(&book["registerCount"]["print"])?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_print_public(print: &Value) -> Result<(), String> {
+    validate_print(print)
 }
 
 /// 帳簿の一覧ごと確かめる。別の帳簿に問題があるときは、その帳簿を名指しする。

@@ -193,6 +193,19 @@ pub const CASH_BOOK: Feature = Feature {
     detail_path: None,
 };
 
+/// レジ締め（レジ管理表）。専用の画面。
+pub const REGISTER_COUNT: Feature = Feature {
+    label: "レジ締め",
+    path: "screen:register-count",
+    list_key: "",
+    title: &[],
+    subtitle: &[],
+    trailing: None,
+    avatar: false,
+    color: GREEN,
+    detail_path: None,
+};
+
 impl Feature {
     /// 一覧ではなく専用の画面を開く機能か。
     pub fn is_screen(&self) -> bool {
@@ -207,7 +220,7 @@ pub const MENU: &[(&str, &[Feature])] = &[
     ("予約・人事", &[RESERVATIONS, STAFF]),
     ("商品・仕入", &[PRODUCTS, PURCHASE_ORDERS]),
     ("請求・経費", &[INVOICES, EXPENSES]),
-    ("現金", &[CASH_BOOK]),
+    ("現金", &[CASH_BOOK, REGISTER_COUNT]),
 ];
 
 #[derive(Clone, Copy)]

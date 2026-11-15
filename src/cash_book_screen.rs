@@ -585,7 +585,7 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
                     }
                     Show(when: move || books.with(|b| matches!(b, Books::Ready { .. }))) {
                         BookPicker(books: books, ledger: ledger, open: choosing_book)
-                        DateBar(ledger: ledger, on_shift: move |days: i64| go(days))
+                        DateBar(date: ledger.date, on_shift: move |days: i64| go(days))
                         Show(when: move || !ledger.load_error.with(String::is_empty)) {
                             ErrorNotice(message: computed(move || ledger.load_error.get()))
                             Button(label: "再読み込み", on_tap: move |_| ledger.load())
@@ -709,9 +709,9 @@ fn book_picker(books: RwSignal<Books>, ledger: Ledger, open: RwSignal<bool>) -> 
 
 /// 「‹ 2026年11月15日（日） ›」と「今日」。
 #[component]
-fn date_bar(ledger: Ledger, on_shift: Callback<i64>) -> Element {
+pub(crate) fn date_bar(date: RwSignal<String>, on_shift: Callback<i64>) -> Element {
     let today = model::tokyo_today();
-    let is_today = computed(move || ledger.date.get() == today);
+    let is_today = computed(move || date.get() == today);
     render! {
         View(
             style: css!(
@@ -731,7 +731,7 @@ fn date_bar(ledger: Ledger, on_shift: Callback<i64>) -> Element {
                 style: css!(display: Display::Flex, flex_direction: FlexDirection::Column, align_items: AlignItems::Center),
             ) {
                 Text(
-                    value: computed(move || model::date_label(&ledger.date.get())),
+                    value: computed(move || model::date_label(&date.get())),
                     style: css!(color: hex(LABEL), font_size: px(20), font_weight: FontWeight::Numeric(600)),
                 )
                 Show(when: move || !is_today.get()) {
@@ -740,7 +740,7 @@ fn date_bar(ledger: Ledger, on_shift: Callback<i64>) -> Element {
                         style: css!(color: hex(TINT), font_size: px(15), margin_top: px(4)),
                         on_tap: move |_| {
                             let today = model::tokyo_today();
-                            let current = ledger.date.get_untracked();
+                            let current = date.get_untracked();
                             let (Ok(a), Ok(b)) = (
                                 chrono::NaiveDate::parse_from_str(&current, "%Y-%m-%d"),
                                 chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d"),
