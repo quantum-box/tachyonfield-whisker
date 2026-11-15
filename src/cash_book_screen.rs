@@ -159,9 +159,11 @@ impl Ledger {
     }
 
     /// 日を読む。入力の途中なら先に保存を送ってから読む。
+    /// 日・帳簿を切り替えて読む。まだ送っていない入力があれば、先に送り、
+    /// 保存できたときだけ切り替える（保存できなければ元の日に戻して、入力と知らせを残す）。
     fn load(self) {
-        // 保存の途中なら、終わってから読む（その間の入力も、元の日として送ってから切り替える）。
-        if self.saving.get_untracked() {
+        if self.dirty.get_untracked() || self.saving.get_untracked() {
+            self.flush();
             spawn_in(self.owner, async move {
                 for _ in 0..300 {
                     if !self.saving.get_untracked() {
@@ -169,11 +171,23 @@ impl Ledger {
                     }
                     sleep(Duration::from_millis(100)).await;
                 }
-                self.load();
+                if self.dirty.get_untracked() || matches!(self.state.get_untracked(), SaveState::Error | SaveState::Conflict) {
+                    if let Some(date) = self.day.with_untracked(|d| d.as_ref().map(|d| d.date.clone())) {
+                        self.date.set(date);
+                    }
+                    if self.save_error.with_untracked(String::is_empty) {
+                        self.save_error.set("保存できなかったので、切り替えていません。".into());
+                    }
+                    return;
+                }
+                self.switch();
             });
             return;
         }
-        self.flush();
+        self.switch();
+    }
+
+    fn switch(self) {
         self.generation.update(|g| *g += 1);
         let generation = self.generation.get_untracked();
         self.day.set(None);

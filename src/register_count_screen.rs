@@ -78,6 +78,8 @@ pub(crate) struct Sheet {
     weather_manual: RwSignal<bool>,
     weather_note: RwSignal<String>,
     pub(crate) owner: Option<Owner>,
+    /// 今の日を読んだときの会社。保存はここへ送る。
+    loaded_tenant: RwSignal<Option<Tenant>>,
 }
 
 impl Sheet {
@@ -89,8 +91,35 @@ impl Sheet {
         self.day.with(|d| d.as_ref().is_some_and(Day::is_confirmed))
     }
 
+    /// 日・帳簿を切り替えて読む。まだ送っていない入力があれば、先に送り、
+    /// 保存できたときだけ切り替える（保存できなければ元の日に戻して、入力と知らせを残す）。
     fn load(self) {
-        self.flush();
+        if self.dirty.get_untracked() || self.saving.get_untracked() {
+            self.flush();
+            spawn_in(self.owner, async move {
+                for _ in 0..300 {
+                    if !self.saving.get_untracked() {
+                        break;
+                    }
+                    run_blocking(|| std::thread::sleep(Duration::from_millis(100))).await;
+                }
+                if self.dirty.get_untracked() || matches!(self.state.get_untracked(), State::Error | State::Conflict) {
+                    if let Some(date) = self.day.with_untracked(|d| d.as_ref().map(|d| d.date.clone())) {
+                        self.date.set(date);
+                    }
+                    if self.save_error.with_untracked(String::is_empty) {
+                        self.save_error.set("保存できなかったので、日付を切り替えていません。".into());
+                    }
+                    return;
+                }
+                self.switch();
+            });
+            return;
+        }
+        self.switch();
+    }
+
+    fn switch(self) {
         self.generation.update(|g| *g += 1);
         let generation = self.generation.get_untracked();
         self.day.set(None);
@@ -103,18 +132,9 @@ impl Sheet {
         let (Some(tenant), Some(book)) = (self.tenant.get_untracked(), self.book.get_untracked()) else {
             return;
         };
+        self.loaded_tenant.set(Some(tenant.clone()));
         let date = self.date.get_untracked();
         spawn_in(self.owner, async move {
-            // 前の日の保存が終わってから読む（前日の終了時を古い枚数で引き継がないように）。
-            for _ in 0..300 {
-                if !self.saving.get_untracked() {
-                    break;
-                }
-                run_blocking(|| std::thread::sleep(Duration::from_millis(100))).await;
-            }
-            if self.generation.get_untracked() != generation {
-                return;
-            }
             let from = cash::shift_date(&date, -1);
             let to = date.clone();
             let id = book.id.clone();
@@ -177,7 +197,7 @@ impl Sheet {
             return;
         }
         let (Some(day), Some(tenant), Some(book)) =
-            (self.day.get_untracked(), self.tenant.get_untracked(), self.book.get_untracked())
+            (self.day.get_untracked(), self.loaded_tenant.get_untracked(), self.book.get_untracked())
         else {
             return;
         };
@@ -287,6 +307,7 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
         weather_manual: signal(false),
         weather_note: signal(String::new()),
         owner: Owner::current(),
+        loaded_tenant: signal(None),
     };
     let focused = signal(None::<InputRef>);
     provide_context(Focused(focused));
@@ -309,8 +330,20 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
     };
     load_books();
     on_cleanup(move || {
+        // 画面ごと消えるので、画面の仕事ではなく別の糸で送る（読んだときの会社・帳簿へ）。
         if sheet.dirty.get_untracked() && !sheet.saving.get_untracked() {
-            sheet.flush();
+            let (Some(day), Some(tenant), Some(book), Some(access)) = (
+                sheet.day.get_untracked(),
+                sheet.loaded_tenant.get_untracked(),
+                sheet.book.get_untracked(),
+                token.get_untracked(),
+            ) else {
+                return;
+            };
+            let version = sheet.version.get_untracked();
+            std::thread::spawn(move || {
+                let _ = api::save_register_count_day(&access, &tenant, &day.date, &day.to_value(), version, &book.id);
+            });
         }
     });
     let go = move |days: i64| {
