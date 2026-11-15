@@ -956,23 +956,38 @@ fn drawer_items(
     });
 
     // 会社の一覧のシートの中身：使える会社。今の会社に ✓。
+    // ピン留めした会社は上に別の見出しでまとめる。行を右へなぞる・長押しでピン留め・外す。
+    let pinned = signal(storage::pinned_tenants());
     let tenant_sections = computed(move || {
         let current_id = tenant.with(|t| t.as_ref().map(|t| t.id.clone()).unwrap_or_default());
         let list = tenants.get();
-        let mut rows: Vec<serde_json::Value> = list
-            .into_iter()
-            .map(|t| {
-                json!({
-                    "key": format!("tenant:{}", t.id),
-                    "title": t.name,
-                    "subtitle": environment_label(&t.environment),
-                    "symbol": "building.columns.fill",
-                    "color": if t.id == current_id { "#007AFF" } else { "#8E8E93" },
-                    "accessory": if t.id == current_id { "check" } else { "none" },
-                })
+        let pins = pinned.get();
+        let row = |t: &Tenant, is_pinned: bool| {
+            json!({
+                "key": format!("tenant:{}", t.id),
+                "title": t.name,
+                "subtitle": environment_label(&t.environment),
+                "symbol": "building.columns.fill",
+                "color": if t.id == current_id { "#007AFF" } else { "#8E8E93" },
+                "accessory": if t.id == current_id { "check" } else { "none" },
+                "action": if is_pinned {
+                    json!({ "key": format!("unpin:{}", t.id), "title": "外す", "symbol": "pin.slash", "color": "#8E8E93" })
+                } else {
+                    json!({ "key": format!("pin:{}", t.id), "title": "ピン留め", "symbol": "pin.fill", "color": "#FF9500" })
+                },
             })
+        };
+        let pinned_rows: Vec<serde_json::Value> = pins
+            .iter()
+            .filter_map(|id| list.iter().find(|t| &t.id == id))
+            .map(|t| row(t, true))
             .collect();
-        if rows.is_empty() {
+        let mut rows: Vec<serde_json::Value> = list
+            .iter()
+            .filter(|t| !pins.contains(&t.id))
+            .map(|t| row(t, false))
+            .collect();
+        if list.is_empty() {
             let error = tenants_error.get();
             rows.push(json!({
                 "key": "__wait",
@@ -980,7 +995,16 @@ fn drawer_items(
                 "accessory": "none",
             }));
         }
-        json!([{ "title": "", "rows": rows }]).to_string()
+        if pinned_rows.is_empty() {
+            let hint = if list.is_empty() { "" } else { "右へなぞるか長押しでピン留めできます" };
+            json!([{ "title": hint, "rows": rows }]).to_string()
+        } else {
+            json!([
+                { "title": "ピン留め", "rows": pinned_rows },
+                { "title": "ほかの会社", "rows": rows },
+            ])
+            .to_string()
+        }
     });
 
     let load_tenants = move || {
@@ -1097,6 +1121,20 @@ fn drawer_items(
                     if key == SIGN_OUT_KEY {
                         choosing.set(false);
                         sign_out(token, tenant);
+                        return;
+                    }
+                    if let Some(id) = key.strip_prefix("pin:") {
+                        pinned.update(|pins| {
+                            if !pins.iter().any(|p| p == id) {
+                                pins.push(id.to_owned());
+                            }
+                        });
+                        storage::save_pinned_tenants(&pinned.get_untracked());
+                        return;
+                    }
+                    if let Some(id) = key.strip_prefix("unpin:") {
+                        pinned.update(|pins| pins.retain(|p| p != id));
+                        storage::save_pinned_tenants(&pinned.get_untracked());
                         return;
                     }
                     let Some(id) = key.strip_prefix("tenant:") else {
