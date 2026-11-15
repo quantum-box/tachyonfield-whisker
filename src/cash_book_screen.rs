@@ -6,6 +6,7 @@
 //! - 確定した日は、取り消すまで変えられない。
 //! - 開いている間、ほかの端末の保存を 10 秒ごとに見に行く（入力中は取り込まない）。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -133,6 +134,10 @@ pub(crate) struct Ledger {
     /// （会社や帳簿を切り替えた後に、前の日の中身を別の帳簿へ送らないため）。
     loaded_tenant: RwSignal<Option<Tenant>>,
     loaded_book: RwSignal<Option<String>>,
+    /// 今の日を読んだときに選んでいた帳簿と、従来の日も読むか（切り替えを取りやめたら戻す）。
+    loaded_choice: RwSignal<Option<(Option<Book>, bool)>>,
+    /// 送っている保存の番号（結果は SAVE_OUTCOMES に残る）。
+    inflight: RwSignal<Option<u64>>,
 }
 
 impl Ledger {
@@ -175,6 +180,11 @@ impl Ledger {
                     if let Some(date) = self.day.with_untracked(|d| d.as_ref().map(|d| d.date.clone())) {
                         self.date.set(date);
                     }
+                    // 帳簿も、この日の帳簿に戻す（表示と保存先がずれないように）。
+                    if let Some((book, legacy)) = self.loaded_choice.get_untracked() {
+                        self.book.set(book);
+                        self.include_legacy.set(legacy);
+                    }
                     if self.save_error.with_untracked(String::is_empty) {
                         self.save_error.set("保存できなかったので、切り替えていません。".into());
                     }
@@ -203,6 +213,7 @@ impl Ledger {
         let legacy = self.include_legacy.get_untracked() || book_id.is_none();
         self.loaded_tenant.set(Some(tenant.clone()));
         self.loaded_book.set(book_id.clone());
+        self.loaded_choice.set(Some((self.book.get_untracked(), self.include_legacy.get_untracked())));
         spawn_in(self.owner, async move {
             // 送ったばかりの保存が終わるまで待つ（戻ってきた日を古い中身で開かない）。
             for _ in 0..50 {
@@ -309,8 +320,11 @@ impl Ledger {
         let generation = self.generation.get_untracked();
         let expected = self.version.get_untracked();
         let book_id = if self.legacy_origin.get_untracked() { None } else { self.loaded_book.get_untracked() };
+        let slot = begin_save();
+        self.inflight.set(Some(slot));
         spawn_in(self.owner, async move {
-            let result = save(self.token, tenant, day.clone(), expected, book_id).await;
+            let result = save(self.token, tenant, day.clone(), expected, book_id, Some(slot)).await;
+            forget_save(slot);
             self.saving.set(false);
             if self.generation.get_untracked() != generation {
                 // 別の日を開いた後に届いた結果。まだ送っていない入力があれば送る。
@@ -356,7 +370,7 @@ impl Ledger {
         let book_id = if legacy { None } else { self.loaded_book.get_untracked() };
         let token = self.token;
         spawn_in(self.owner, async move {
-            let _ = save(token, tenant, day, version, book_id).await;
+            let _ = save(token, tenant, day, version, book_id, None).await;
         });
     }
 
@@ -433,6 +447,7 @@ async fn save(
     day: Day,
     expected: Option<i64>,
     book_id: Option<String>,
+    slot: Option<u64>,
 ) -> Result<i64, SaveError> {
     let data = day.to_value();
     let date = day.date.clone();
@@ -440,30 +455,63 @@ async fn save(
     let result = authed(token, move |access| {
         match api::save_cash_book_day(access, &tenant, &date, &data, expected, book_id.as_deref()) {
             Err(SaveError::Other(message)) if message == api::EXPIRED => Err(message),
-            other => Ok(other),
+            other => {
+                if let Some(slot) = slot {
+                    record_save(slot, &other);
+                }
+                Ok(other)
+            }
         }
     })
     .await;
     result.unwrap_or_else(|message| Err(SaveError::Other(message)))
 }
 
-/// 画面を閉じたときの送り残しに使う版。保存の途中でなければ今の版。途中なら、その保存で
-/// 版が 1 つ進むのを待ってその版を使う（ほかの端末が保存していたら送らない）。
-pub(crate) fn settle_version(
-    known: Option<i64>,
-    in_flight: bool,
-    read: impl Fn() -> Option<i64>,
-) -> Option<Option<i64>> {
-    if !in_flight {
-        return Some(known);
+/// 送った保存の結果を、画面とは別に覚えておく所（画面を閉じた後も、その結果を待てるように）。
+/// 鍵は保存ごとの番号。値は `None` = まだ、`Some(Ok(版))` = 保存できた、`Some(Err)` = できなかった。
+static SAVE_OUTCOMES: std::sync::Mutex<Option<HashMap<u64, Option<Result<i64, ()>>>>> = std::sync::Mutex::new(None);
+
+pub(crate) fn begin_save() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut map) = SAVE_OUTCOMES.lock() {
+        map.get_or_insert_with(HashMap::new).insert(id, None);
     }
-    let next = known.map_or(1, |v| v + 1);
-    for _ in 0..40 {
-        match read() {
-            Some(v) if v == next => return Some(Some(v)),
-            current if current == known => std::thread::sleep(Duration::from_millis(500)),
-            _ => return None,
+    id
+}
+
+/// 保存の結果を書く（保存を送った糸から呼ぶ。期限切れの取り直しは結果に数えない）。
+pub(crate) fn record_save<T>(slot: u64, result: &Result<i64, T>) {
+    if let Ok(mut map) = SAVE_OUTCOMES.lock() {
+        if let Some(entry) = map.get_or_insert_with(HashMap::new).get_mut(&slot) {
+            *entry = Some(result.as_ref().map(|v| *v).map_err(|_| ()));
         }
+    }
+}
+
+/// 画面が結果を受け取ったら消す（画面を閉じた後の待ちにだけ使うので）。
+pub(crate) fn forget_save(slot: u64) {
+    if let Ok(mut map) = SAVE_OUTCOMES.lock() {
+        map.get_or_insert_with(HashMap::new).remove(&slot);
+    }
+}
+
+/// 送った保存が終わるのを待って、保存できたらその版を返す（できなければ `None`）。
+pub(crate) fn wait_save(slot: u64) -> Option<i64> {
+    for _ in 0..120 {
+        let done = SAVE_OUTCOMES
+            .lock()
+            .ok()
+            .and_then(|map| map.as_ref().and_then(|m| m.get(&slot).cloned()))
+            .flatten();
+        if let Some(result) = done {
+            if let Ok(mut map) = SAVE_OUTCOMES.lock() {
+                map.get_or_insert_with(HashMap::new).remove(&slot);
+            }
+            return result.ok();
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
     None
 }
@@ -526,6 +574,8 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
         owner: Owner::current(),
         loaded_tenant: signal(None),
         loaded_book: signal(None),
+        loaded_choice: signal(None),
+        inflight: signal(None),
     };
     let choosing_book = signal(false);
     let settings_open = signal(false);
@@ -582,16 +632,17 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
                 return;
             };
             let known = ledger.version.get_untracked();
-            let in_flight = ledger.saving.get_untracked();
+            let in_flight = ledger.saving.get_untracked().then(|| ledger.inflight.get_untracked()).flatten();
             let book_id = if ledger.legacy_origin.get_untracked() { None } else { ledger.loaded_book.get_untracked() };
             std::thread::spawn(move || {
-                let read = || {
-                    api::cash_book_days(&access, &tenant, &day.date, &day.date, book_id.as_deref())
-                        .ok()
-                        .and_then(|v| model::saved_days(&v, book_id.is_none()).into_iter().find(|d| d.day.date == day.date))
-                        .map(|d| d.version)
+                // 保存の途中なら、その保存が本当にできたかを待ち、できたときだけその版で送る。
+                let version = match in_flight {
+                    Some(slot) => match wait_save(slot) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => known,
                 };
-                let Some(version) = settle_version(known, in_flight, read) else { return };
                 let _ = api::save_cash_book_day(&access, &tenant, &day.date, &day.to_value(), version, book_id.as_deref());
             });
         }
@@ -1329,19 +1380,19 @@ pub(crate) fn button(label: &'static str, on_tap: Callback<()>) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::settle_version;
-    use std::cell::Cell;
+    use super::{begin_save, record_save, wait_save};
 
     #[test]
-    fn waits_for_the_in_flight_save_then_uses_its_version() {
-        assert_eq!(settle_version(Some(3), false, || None), Some(Some(3)));
-        let calls = Cell::new(0);
-        let read = || {
-            calls.set(calls.get() + 1);
-            if calls.get() < 2 { Some(3) } else { Some(4) }
-        };
-        assert_eq!(settle_version(Some(3), true, read), Some(Some(4)));
-        assert_eq!(settle_version(Some(3), true, || Some(7)), None);
-        assert_eq!(settle_version(None, true, || Some(1)), Some(Some(1)));
+    fn waits_for_the_actual_outcome_of_the_in_flight_save() {
+        let ok = begin_save();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            record_save::<()>(ok, &Ok(4));
+        });
+        assert_eq!(wait_save(ok), Some(4));
+        thread.join().unwrap();
+        let failed = begin_save();
+        record_save(failed, &Err::<i64, _>("conflict"));
+        assert_eq!(wait_save(failed), None);
     }
 }

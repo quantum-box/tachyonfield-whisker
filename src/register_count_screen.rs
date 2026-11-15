@@ -80,6 +80,8 @@ pub(crate) struct Sheet {
     pub(crate) owner: Option<Owner>,
     /// 今の日を読んだときの会社。保存はここへ送る。
     loaded_tenant: RwSignal<Option<Tenant>>,
+    /// 送っている保存の番号。
+    inflight: RwSignal<Option<u64>>,
 }
 
 impl Sheet {
@@ -206,17 +208,23 @@ impl Sheet {
         self.state.set(State::Saving);
         let generation = self.generation.get_untracked();
         let expected = self.version.get_untracked();
+        let slot = crate::cash_book_screen::begin_save();
+        self.inflight.set(Some(slot));
         spawn_in(self.owner, async move {
             let data = day.to_value();
             let date = day.date.clone();
             let result = authed(self.token, move |access| {
                 match api::save_register_count_day(access, &tenant, &date, &data, expected, &book.id) {
                     Err(SaveError::Other(m)) if m == api::EXPIRED => Err(m),
-                    other => Ok(other),
+                    other => {
+                        crate::cash_book_screen::record_save(slot, &other);
+                        Ok(other)
+                    }
                 }
             })
             .await
             .unwrap_or_else(|m| Err(SaveError::Other(m)));
+            crate::cash_book_screen::forget_save(slot);
             self.saving.set(false);
             if self.generation.get_untracked() != generation {
                 self.flush();
@@ -308,6 +316,7 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
         weather_note: signal(String::new()),
         owner: Owner::current(),
         loaded_tenant: signal(None),
+        inflight: signal(None),
     };
     let focused = signal(None::<InputRef>);
     provide_context(Focused(focused));
@@ -342,14 +351,15 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
                 return;
             };
             let known = sheet.version.get_untracked();
-            let in_flight = sheet.saving.get_untracked();
+            let in_flight = sheet.saving.get_untracked().then(|| sheet.inflight.get_untracked()).flatten();
             std::thread::spawn(move || {
-                let read = || {
-                    api::register_count_days(&access, &tenant, &day.date, &day.date, &book.id)
-                        .ok()
-                        .and_then(|v| v["items"].as_array().and_then(|i| i.iter().find(|x| x["date"] == day.date.as_str()).and_then(|x| x["version"].as_i64())))
+                let version = match in_flight {
+                    Some(slot) => match crate::cash_book_screen::wait_save(slot) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => known,
                 };
-                let Some(version) = crate::cash_book_screen::settle_version(known, in_flight, read) else { return };
                 let _ = api::save_register_count_day(&access, &tenant, &day.date, &day.to_value(), version, &book.id);
             });
         }
