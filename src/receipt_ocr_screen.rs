@@ -377,7 +377,8 @@ fn list_view(ocr: Ocr) -> Element {
                 View(style: group_style()) {
                     ForEach(
                         each: move || ocr.list.get(),
-                        key: |r: &OcrReceipt| format!("{}:{}:{:?}", r.id(), r.receipt.status, r.receipt.total),
+                        // 中身が変わったら行を作り直す（行は開いたときの値を持つため）。
+                        key: |r: &OcrReceipt| format!("{}:{:?}", r.id(), r),
                         children: move |r: ReadSignal<OcrReceipt>| {
                             let r = r.get_untracked();
                             let label = format!(
