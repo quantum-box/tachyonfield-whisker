@@ -129,6 +129,10 @@ pub(crate) struct Ledger {
     pub(crate) nearby: RwSignal<Vec<Day>>,
     /// 画面の持ち主（仕事はここで動かす）。
     pub(crate) owner: Option<Owner>,
+    /// 今開いている日を読んだときの会社と帳簿。保存は必ずここへ送る
+    /// （会社や帳簿を切り替えた後に、前の日の中身を別の帳簿へ送らないため）。
+    loaded_tenant: RwSignal<Option<Tenant>>,
+    loaded_book: RwSignal<Option<String>>,
 }
 
 impl Ledger {
@@ -142,9 +146,10 @@ impl Ledger {
 
     /// この日に使う項目。
     pub(crate) fn template(&self) -> Template {
+        // 日に写した設定が無い日（従来の帳簿の日）は、計算と同じく従来の項目で出す。
         let fallback = self.book.with(|b| b.as_ref().map(|b| b.template.clone()));
         self.day.with(|d| match d {
-            Some(day) => day.template_or(fallback.as_ref()),
+            Some(day) => day.template_or(None),
             None => fallback.unwrap_or_else(model::legacy_template),
         })
     }
@@ -155,6 +160,19 @@ impl Ledger {
 
     /// 日を読む。入力の途中なら先に保存を送ってから読む。
     fn load(self) {
+        // 保存の途中なら、終わってから読む（その間の入力も、元の日として送ってから切り替える）。
+        if self.saving.get_untracked() {
+            spawn_in(self.owner, async move {
+                for _ in 0..300 {
+                    if !self.saving.get_untracked() {
+                        break;
+                    }
+                    sleep(Duration::from_millis(100)).await;
+                }
+                self.load();
+            });
+            return;
+        }
         self.flush();
         self.generation.update(|g| *g += 1);
         let generation = self.generation.get_untracked();
@@ -169,6 +187,8 @@ impl Ledger {
         let date = self.date.get_untracked();
         let book_id = self.book_id();
         let legacy = self.include_legacy.get_untracked() || book_id.is_none();
+        self.loaded_tenant.set(Some(tenant.clone()));
+        self.loaded_book.set(book_id.clone());
         spawn_in(self.owner, async move {
             // 送ったばかりの保存が終わるまで待つ（戻ってきた日を古い中身で開かない）。
             for _ in 0..50 {
@@ -205,7 +225,7 @@ impl Ledger {
                 continue;
             };
             if item.day.previous_balance != resolved.previous_balance {
-                self.send_quietly(resolved.clone(), item.version, item.legacy);
+                self.send_quietly(resolved.clone(), Some(item.version), item.legacy);
             }
         }
         let carried = model::carried_over_balance(date, &earlier);
@@ -266,7 +286,7 @@ impl Ledger {
         {
             return;
         }
-        let (Some(day), Some(tenant)) = (self.day.get_untracked(), self.tenant.get_untracked()) else {
+        let (Some(day), Some(tenant)) = (self.day.get_untracked(), self.loaded_tenant.get_untracked()) else {
             return;
         };
         self.saving.set(true);
@@ -274,7 +294,7 @@ impl Ledger {
         self.state.set(SaveState::Saving);
         let generation = self.generation.get_untracked();
         let expected = self.version.get_untracked();
-        let book_id = if self.legacy_origin.get_untracked() { None } else { self.book_id() };
+        let book_id = if self.legacy_origin.get_untracked() { None } else { self.loaded_book.get_untracked() };
         spawn_in(self.owner, async move {
             let result = save(self.token, tenant, day.clone(), expected, book_id).await;
             self.saving.set(false);
@@ -315,14 +335,14 @@ impl Ledger {
     }
 
     /// 画面に関わらない保存（前の日の合わせ直し・画面を閉じたときの送り残し）。結果は見ない。
-    fn send_quietly(&self, day: Day, version: i64, legacy: bool) {
-        let Some(tenant) = self.tenant.get_untracked() else {
+    fn send_quietly(&self, day: Day, version: Option<i64>, legacy: bool) {
+        let Some(tenant) = self.loaded_tenant.get_untracked() else {
             return;
         };
-        let book_id = if legacy { None } else { self.book_id() };
+        let book_id = if legacy { None } else { self.loaded_book.get_untracked() };
         let token = self.token;
         spawn_in(self.owner, async move {
-            let _ = save(token, tenant, day, Some(version), book_id).await;
+            let _ = save(token, tenant, day, version, book_id).await;
         });
     }
 
@@ -337,12 +357,12 @@ impl Ledger {
         if !idle() {
             return;
         }
-        let Some(tenant) = self.tenant.get_untracked() else {
+        let Some(tenant) = self.loaded_tenant.get_untracked() else {
             return;
         };
         let generation = self.generation.get_untracked();
         let date = self.date.get_untracked();
-        let book_id = if self.legacy_origin.get_untracked() { None } else { self.book_id() };
+        let book_id = if self.legacy_origin.get_untracked() { None } else { self.loaded_book.get_untracked() };
         let legacy = self.legacy_origin.get_untracked();
         spawn_in(self.owner, async move {
             let day_for = date.clone();
@@ -363,7 +383,11 @@ impl Ledger {
             if self.version.get_untracked().is_some_and(|local| remote.version <= local) {
                 return;
             }
-            // ほかの端末が保存した ① はそのまま使う。
+            // ほかの端末が保存した ① はそのまま使う。前の日から引き継ぐ額も、それに合わせる
+            // （次に入力したとき、古い額で ① を戻さないように）。
+            if !remote.day.previous_balance_manual && remote.day.confirmed_at.is_none() {
+                self.carried.set(remote.day.previous_balance);
+            }
             self.version.set(Some(remote.version));
             self.day.set(Some(remote.day));
             self.view.update(|v| *v += 1);
@@ -465,6 +489,8 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
         saving: signal(false),
         nearby: signal(Vec::new()),
         owner: Owner::current(),
+        loaded_tenant: signal(None),
+        loaded_book: signal(None),
     };
     let choosing_book = signal(false);
     let settings_open = signal(false);
@@ -513,14 +539,17 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
         alive.store(false, Ordering::Relaxed);
         // 閉じる前に、まだ送っていない入力を送る。
         if ledger.dirty.get_untracked() && !ledger.saving.get_untracked() {
-            if let (Some(day), Some(version)) = (ledger.day.get_untracked(), ledger.version.get_untracked()) {
-                ledger.send_quietly(day, version, ledger.legacy_origin.get_untracked());
-            } else if let (Some(day), Some(tenant)) = (ledger.day.get_untracked(), tenant.get_untracked()) {
-                let book_id = ledger.book_id();
-                spawn_local(async move {
-                    let _ = save(token, tenant, day, None, book_id).await;
-                });
-            }
+            // 画面ごと消えるので、画面の仕事ではなく別の糸で送る。送り先は、この日を読んだときの会社・帳簿。
+            let (Some(day), Some(tenant), Some(access)) =
+                (ledger.day.get_untracked(), ledger.loaded_tenant.get_untracked(), token.get_untracked())
+            else {
+                return;
+            };
+            let version = ledger.version.get_untracked();
+            let book_id = if ledger.legacy_origin.get_untracked() { None } else { ledger.loaded_book.get_untracked() };
+            std::thread::spawn(move || {
+                let _ = api::save_cash_book_day(&access, &tenant, &day.date, &day.to_value(), version, book_id.as_deref());
+            });
         }
     });
 

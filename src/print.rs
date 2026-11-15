@@ -67,8 +67,9 @@ th, td { border: 1px solid #000; padding: 0 1.5mm; height: 6.8mm; vertical-align
 ";
 
 /// 現金出納帳 1 日分のページ。`start` はその日の最初の証番。
-pub fn cash_book_page(day: &Day, fallback: Option<&Template>, start: usize) -> String {
-    let template = day.template_or(fallback);
+pub fn cash_book_page(day: &Day, _fallback: Option<&Template>, start: usize) -> String {
+    // 計算と同じ項目で出す（設定を写していない従来の日は従来の項目）。
+    let template = day.template_or(None);
     let print = Print::from(&template.raw["print"], "現金出納帳");
     let print = if template.raw.is_null() {
         Print { reiwa: true, font_size: 10.5, approval: "確認印".into(), ..Print::from(&Value::Null, "現金出納帳") }
@@ -318,8 +319,8 @@ pub fn file_name(kind: &str, from: &str, to: &str) -> String {
 }
 
 /// 出納帳のページが横向きか（その日の設定）。
-pub fn cash_landscape(day: &Day, fallback: Option<&Template>) -> bool {
-    day.template_or(fallback).raw["print"]["orientation"] == "landscape"
+pub fn cash_landscape(day: &Day, _fallback: Option<&Template>) -> bool {
+    day.template_or(None).raw["print"]["orientation"] == "landscape"
 }
 
 /// レジ管理表のページが横向きか（既定は横）。

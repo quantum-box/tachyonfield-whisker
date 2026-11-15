@@ -105,6 +105,16 @@ impl Sheet {
         };
         let date = self.date.get_untracked();
         spawn_in(self.owner, async move {
+            // 前の日の保存が終わってから読む（前日の終了時を古い枚数で引き継がないように）。
+            for _ in 0..300 {
+                if !self.saving.get_untracked() {
+                    break;
+                }
+                run_blocking(|| std::thread::sleep(Duration::from_millis(100))).await;
+            }
+            if self.generation.get_untracked() != generation {
+                return;
+            }
             let from = cash::shift_date(&date, -1);
             let to = date.clone();
             let id = book.id.clone();

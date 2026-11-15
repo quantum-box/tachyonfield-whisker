@@ -297,6 +297,10 @@ pub(crate) fn product_sales(sheet: Sheet) -> Element {
     let error = signal(String::new());
     let message = signal(String::new());
     let result = signal(None::<(BTreeMap<String, i64>, BTreeMap<String, i64>, Vec<String>, usize)>);
+    // 集計に使った伝票。今の伝票と違えば、その集計は使わない（別の伝票の数で上書きしないように）。
+    let counted_for = signal(Vec::<String>::new());
+    let current_ids = computed(move || sheet.day.with(|d| d.as_ref().map(|d| d.receipt_ids.clone()).unwrap_or_default()));
+    let stale = computed(move || result.with(Option::is_some) && counted_for.get() != current_ids.get());
     let has_receipts = computed(move || sheet.day.with(|d| d.as_ref().is_some_and(|d| !d.receipt_ids.is_empty())));
     let load = move || {
         let (Some(tenant), Some(day)) = (sheet.tenant.get_untracked(), sheet.day.get_untracked()) else { return };
@@ -320,8 +324,12 @@ pub(crate) fn product_sales(sheet: Sheet) -> Element {
             })
             .await;
             loading.set(false);
+            let ids = day.receipt_ids.clone();
             match fetched.and_then(|entries| model::product_sales(&day, &template, &entries)) {
-                Ok(found) => result.set(Some(found)),
+                Ok(found) => {
+                    counted_for.set(ids);
+                    result.set(Some(found));
+                }
                 Err(e) => error.set(if e.is_empty() { "売上台帳を取得できませんでした。".into() } else { e }),
             }
         });
@@ -360,13 +368,18 @@ pub(crate) fn product_sales(sheet: Sheet) -> Element {
                         Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
                         FieldRow(label: computed(|| "再取得".to_owned()), value: computed(String::new), on_tap: move |_| load())
                     }
-                    Show(when: move || result.with(Option::is_some)) {
+                    Show(when: move || stale.get()) {
+                        Text(value: "伝票を入れ替えたので、集計し直してください。", style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                        FieldRow(label: computed(|| "集計し直す".to_owned()), value: computed(String::new), on_tap: move |_| load())
+                    }
+                    Show(when: move || result.with(Option::is_some) && !stale.get()) {
                         Text(value: summary, style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16))))
                         Show(when: move || result.with(|r| r.as_ref().is_some_and(|r| r.3 > 0))) {
                             FieldRow(
                                 label: computed(|| "販売数・金額を反映".to_owned()),
                                 value: computed(String::new),
                                 on_tap: move |_| {
+                                    if stale.get() { return; }
                                     let Some((quantities, amounts, _, _)) = result.get_untracked() else { return };
                                     sheet.update(false, move |d| {
                                         for (k, v) in amounts { d.sales.insert(k, Some(v)); }

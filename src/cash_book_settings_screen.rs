@@ -92,6 +92,12 @@ impl Editor {
 
     /// 下書きを直す。`rebuild` は行の数が変わったとき（入力欄を作り直す）。
     pub(crate) fn edit(self, rebuild: bool, change: impl FnOnce(&mut Value)) {
+        // 保存の途中は変えさせない（送った後の変更が「保存しました」で消えないように）。
+        if self.saving.get_untracked() {
+            self.message.set("保存中です。終わってから変えてください。".into());
+            self.view.update(|v| *v += 1);
+            return;
+        }
         self.draft.update(change);
         self.warned.set(false);
         if rebuild {
@@ -132,6 +138,7 @@ impl Editor {
             self.message.set(message);
             return;
         }
+        let submitted = self.draft.get_untracked();
         let mut data = settings["data"].clone();
         data["books"] = Value::Array(books);
         let version = settings["version"].as_i64().unwrap_or(0);
@@ -146,8 +153,13 @@ impl Editor {
             match result {
                 Ok(saved) => {
                     self.settings.set(Some(saved));
-                    self.index.set(None);
-                    self.message.set("保存しました。".into());
+                    // 送った後に変わっていたら（入力欄の途中の文字など）、閉じずに残す。
+                    if self.draft.with_untracked(|d| *d != submitted) {
+                        self.message.set("保存しました。そのあとの変更はまだ保存していません。".into());
+                    } else {
+                        self.index.set(None);
+                        self.message.set("保存しました。".into());
+                    }
                 }
                 Err(message) => self.message.set(format!("設定を保存・取得できませんでした。{message}")),
             }
