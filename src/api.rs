@@ -331,6 +331,117 @@ pub fn fetch_record(token: &str, tenant: &Tenant, path: &str) -> Result<Value, S
         .map_err(|e| format!("応答を読めません: {e}"))
 }
 
+/// 現金出納帳の帳簿設定。まだ設定の API が無い環境（404）では `None`。
+pub fn cash_book_settings(token: &str, tenant: &Tenant) -> Result<Option<Value>, String> {
+    match field_request(
+        "GET",
+        "/v1/field/cash-book/settings",
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .call()
+    {
+        Ok(response) => response
+            .into_json()
+            .map(Some)
+            .map_err(|e| format!("応答を読めません: {e}")),
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(error) => Err(describe_error(error)),
+    }
+}
+
+/// 現金出納帳の日を `from`〜`to`（両端を含む、92 日まで）読む。
+/// `book_id` が無ければ従来の帳簿（店舗・レジを分ける前）。
+pub fn cash_book_days(
+    token: &str,
+    tenant: &Tenant,
+    from: &str,
+    to: &str,
+    book_id: Option<&str>,
+) -> Result<Value, String> {
+    let mut path = format!("/v1/field/cash-book/days?from={from}&to={to}");
+    if let Some(id) = book_id {
+        path.push_str("&book_id=");
+        path.push_str(&encode_query(id));
+    }
+    fetch_record(token, tenant, &path)
+}
+
+/// 出納帳の保存が断られた理由。
+#[derive(Clone, Debug, PartialEq)]
+pub enum SaveError {
+    /// ほかの端末が先にこの日を保存した（版が合わない）。
+    Conflict,
+    /// 行に入れたレシートが、すでにほかの日（`date`）の出納帳に入っている。
+    ReceiptUsed { receipt_id: String, date: String },
+    Other(String),
+}
+
+/// 現金出納帳の 1 日を保存し、新しい版を返す。`expected_version` は編集を始めたときの版
+/// （一度も保存していない日は `None`）。合わなければ `SaveError::Conflict`。
+pub fn save_cash_book_day(
+    token: &str,
+    tenant: &Tenant,
+    date: &str,
+    data: &Value,
+    expected_version: Option<i64>,
+    book_id: Option<&str>,
+) -> Result<i64, SaveError> {
+    let mut body = json!({ "data": data, "expectedVersion": expected_version });
+    if let Some(id) = book_id {
+        body["bookId"] = json!(id);
+    }
+    let response = field_request(
+        "PUT",
+        &format!("/v1/field/cash-book/days/{date}"),
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .set("Content-Type", "application/json")
+    .send_json(body);
+    match response {
+        Ok(response) => {
+            let value: Value = response
+                .into_json()
+                .map_err(|e| SaveError::Other(format!("応答を読めません: {e}")))?;
+            value["version"]
+                .as_i64()
+                .ok_or_else(|| SaveError::Other("応答の形が想定と違います".into()))
+        }
+        Err(ureq::Error::Status(409, response)) => {
+            let body: Value = response.into_json().unwrap_or(Value::Null);
+            Err(receipt_used(body["message"].as_str().unwrap_or(""))
+                .map_or(SaveError::Conflict, |(receipt_id, date)| {
+                    SaveError::ReceiptUsed { receipt_id, date }
+                }))
+        }
+        Err(error) => Err(SaveError::Other(describe_error(error))),
+    }
+}
+
+/// サーバーの文言（cash_book_api.rs の receipt_used_message）からレシートと日を取り出す。
+fn receipt_used(message: &str) -> Option<(String, String)> {
+    let rest = message.split("receipt ").nth(1)?;
+    let (receipt_id, rest) = rest.split_once(" is already on the cash book for ")?;
+    let date: String = rest.chars().take(10).collect();
+    let valid = date.len() == 10 && date.chars().filter(|c| *c == '-').count() == 2;
+    valid.then(|| (receipt_id.to_owned(), date))
+}
+
+fn encode_query(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// Field Agent の execute だけを流す Worker。本番 API は応答をため込む（Lambda）ので、
 /// Web 版（apps/client/src/api/field-stream-url.ts）と同じくこちらへ送る。
 const AGENT_STREAM_BASE_URL: &str = "https://field-agent-stream.txcloud.app";
@@ -574,4 +685,17 @@ fn attachment_id(response: &Value) -> Result<String, String> {
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| "ファイルの置き場所が返ってきませんでした".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_receipt_used_message() {
+        let message = "receipt rc_01abc is already on the cash book for 2026-11-03; remove it from that day first";
+        assert_eq!(receipt_used(message), Some(("rc_01abc".into(), "2026-11-03".into())));
+        assert_eq!(receipt_used("expectedVersion does not match"), None);
+        assert_eq!(encode_query("a b/é"), "a%20b%2F%C3%A9");
+    }
 }

@@ -10,6 +10,8 @@ mod agent;
 mod api;
 mod attachments;
 mod cache;
+mod cash_book;
+mod cash_book_screen;
 mod features;
 mod markdown;
 mod storage;
@@ -755,6 +757,11 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                     children: move |k: ReadSignal<(usize, usize)>| {
                         let (a, i) = k.get_untracked();
                         let feature = area_features(a)[i];
+                        if feature.is_screen() {
+                            return render! {
+                                cash_book_screen::CashBookScreen(token: token, tenant: tenant)
+                            };
+                        }
                         render! {
                             FeatureList(
                                 token: token,
@@ -847,6 +854,7 @@ fn feature_symbol(label: &str) -> &'static str {
         "発注書" => "doc.text.fill",
         "請求書" => "yensign",
         "経費" => "creditcard.fill",
+        "現金出納帳" => "banknote.fill",
         _ => "square.fill",
     }
 }
@@ -860,6 +868,7 @@ fn area_symbol(name: &str) -> &'static str {
         "予約・人事" => "calendar",
         "商品・仕入" => "shippingbox",
         "請求・経費" => "yensign.circle",
+        "現金" => "banknote",
         _ => "square.grid.2x2",
     }
 }

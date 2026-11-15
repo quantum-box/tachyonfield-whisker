@@ -180,6 +180,26 @@ pub const EXPENSES: Feature = Feature {
     detail_path: None,
 };
 
+/// 現金出納帳。一覧ではなく専用の画面（`cash_book_screen`）を開くので、`path` は API ではない。
+pub const CASH_BOOK: Feature = Feature {
+    label: "現金出納帳",
+    path: "screen:cash-book",
+    list_key: "",
+    title: &[],
+    subtitle: &[],
+    trailing: None,
+    avatar: false,
+    color: GREEN,
+    detail_path: None,
+};
+
+impl Feature {
+    /// 一覧ではなく専用の画面を開く機能か。
+    pub fn is_screen(&self) -> bool {
+        self.path.starts_with("screen:")
+    }
+}
+
 /// メニュー画面のグループ。Web 版のメニューと同じ並び。
 pub const MENU: &[(&str, &[Feature])] = &[
     ("販売管理", &[DEALS, QUOTATIONS, ORDERS, SALES_CONTRACTS]),
@@ -187,6 +207,7 @@ pub const MENU: &[(&str, &[Feature])] = &[
     ("予約・人事", &[RESERVATIONS, STAFF]),
     ("商品・仕入", &[PRODUCTS, PURCHASE_ORDERS]),
     ("請求・経費", &[INVOICES, EXPENSES]),
+    ("現金", &[CASH_BOOK]),
 ];
 
 #[derive(Clone, Copy)]
