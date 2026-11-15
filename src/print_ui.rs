@@ -1,7 +1,7 @@
 //! 印刷の部分（1 日分と、期間印刷）。期間印刷は保存済みの日だけを日付順に 1 日 1 ページで組む。
 
 use super::*;
-use crate::cash_book::{self as cash, Day, SavedDay, Template};
+use crate::cash_book::{self as cash, Day, Template};
 use crate::cash_book_screen::*;
 use crate::cash_book_settings_screen::Hint;
 use crate::print;
@@ -45,6 +45,7 @@ pub(crate) fn period_print(
     kind: Kind,
     book_id: Signal<Option<String>>,
     fallback: Signal<Option<Template>>,
+    include_legacy: Signal<bool>,
     date: Signal<String>,
 ) -> Element {
     let open = signal(false);
@@ -79,6 +80,8 @@ pub(crate) fn period_print(
         let Some(current) = tenant.get_untracked() else { return };
         let id = book_id.get();
         let fb = fallback.get();
+        // 先頭の帳簿は、画面と同じく従来の帳簿の日も合わせて印刷する。
+        let legacy = include_legacy.get() || id.is_none();
         loading.set(true);
         message.set(String::new());
         html.set(String::new());
@@ -87,10 +90,9 @@ pub(crate) fn period_print(
             let result = authed(token, move |access| -> Result<(Vec<String>, bool), String> {
                 match kind {
                     Kind::Cash => {
-                        let history = api::cash_book_days(access, &current, &cash::shift_date(&fa, -62), &cash::shift_date(&fa, -1), id.as_deref())?;
-                        let range = api::cash_book_days(access, &current, &fa, &fb_to, id.as_deref())?;
-                        let mut all: Vec<SavedDay> = cash::saved_days(&history, id.is_none());
-                        all.extend(cash::saved_days(&range, id.is_none()));
+                        // サーバーは一度に 92 日までなので、前の 62 日（繰越と証番のため）と期間を分けて読む。
+                        let mut all = read_days(access, &current, &cash::shift_date(&fa, -62), &cash::shift_date(&fa, -1), id.as_deref(), legacy)?;
+                        all.extend(read_days(access, &current, &fa, &fb_to, id.as_deref(), legacy)?);
                         let days = cash::with_carried_balances(&all.into_iter().map(|s| s.day).collect::<Vec<_>>());
                         let mut landscape = false;
                         let pages = days

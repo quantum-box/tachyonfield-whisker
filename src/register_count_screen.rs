@@ -562,6 +562,7 @@ fn register_sheet(sheet: Sheet) -> Element {
                 kind: crate::print_ui::Kind::Register,
                 book_id: computed(move || sheet.book.with(|b| b.as_ref().map(|b| b.id.clone()))),
                 fallback: computed(|| None),
+                include_legacy: computed(|| false),
                 date: computed(move || sheet.date.get()),
             )
         }

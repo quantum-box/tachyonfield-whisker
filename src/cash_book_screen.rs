@@ -106,7 +106,7 @@ pub(crate) struct Ledger {
     /// 選んでいる帳簿。`None` は従来の帳簿。
     pub(crate) book: RwSignal<Option<Book>>,
     /// 従来の帳簿の日も合わせて読むか（設定の先頭の帳簿のとき）。
-    include_legacy: RwSignal<bool>,
+    pub(crate) include_legacy: RwSignal<bool>,
     pub(crate) date: RwSignal<String>,
     pub(crate) day: RwSignal<Option<Day>>,
     pub(crate) version: RwSignal<Option<i64>>,
@@ -396,7 +396,7 @@ impl Ledger {
 }
 
 /// 期間の日を読む。先頭の帳簿なら、従来の帳簿の日も合わせる。
-fn read_days(
+pub(crate) fn read_days(
     access: &str,
     tenant: &Tenant,
     from: &str,
@@ -972,6 +972,7 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
                 kind: crate::print_ui::Kind::Cash,
                 book_id: computed(move || ledger.book.with(|b| b.as_ref().map(|b| b.id.clone()))),
                 fallback: computed(move || ledger.book.with(|b| b.as_ref().map(|b| b.template.clone()))),
+                include_legacy: computed(move || ledger.include_legacy.get()),
                 date: computed(move || ledger.date.get()),
             )
         }
