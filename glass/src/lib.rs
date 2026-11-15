@@ -38,6 +38,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_sheet_schema::element_provider(),
             native_backdrop_schema::element_provider(),
             native_attach_button_schema::element_provider(),
+            native_print_button_schema::element_provider(),
         ],
     )
 }
@@ -487,5 +488,65 @@ pub fn attach_button(on_pick: Callback<PickedFile>, style: Style) -> Element {
 #[component]
 pub fn attach_button(on_pick: Callback<PickedFile>, style: Style) -> Element {
     let _ = (&on_pick, &style);
+    render! { View() }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PrintDoneEvent {
+    #[serde(default)]
+    pub detail: PrintDoneDetail,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PrintDoneDetail {
+    #[serde(default)]
+    pub ok: bool,
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:PrintButton", measurement = None)]
+pub fn native_print_button(
+    label: Signal<String>,
+    html: Signal<String>,
+    name: Signal<String>,
+    landscape: Signal<bool>,
+    style: Style,
+    on_done: PrintDoneEvent,
+) {
+}
+
+/// 「印刷・PDF」ボタン。押すと `html` を A4 に組んで iOS の印刷画面を出す（PDF 保存・共有もできる）。
+/// `html` が空のときは押せない。iOS 以外は何も出さない。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn print_button(
+    label: String,
+    html: Signal<String>,
+    name: Signal<String>,
+    landscape: Signal<bool>,
+    style: Style,
+) -> Element {
+    NativePrintButton::builder()
+        .label(label.clone())
+        .html(html)
+        .name(name)
+        .landscape(landscape)
+        .style(style.clone())
+        .on_done(|_e: PrintDoneEvent| {})
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn print_button(
+    label: String,
+    html: Signal<String>,
+    name: Signal<String>,
+    landscape: Signal<bool>,
+    style: Style,
+) -> Element {
+    let _ = (&label, &html, &name, &landscape, &style);
     render! { View() }
 }

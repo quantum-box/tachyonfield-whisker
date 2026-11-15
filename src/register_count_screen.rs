@@ -539,6 +539,21 @@ fn register_sheet(sheet: Sheet) -> Element {
                     sheet.flush();
                 })
             }
+            crate::print_ui::DayPrint(
+                html: computed(move || sheet.day.with(|d| d.as_ref().map(|d| {
+                    crate::print::document(&crate::print::file_name("レジ管理表", &d.date, &d.date), &[crate::print::register_page(d)], crate::print::register_landscape(d))
+                }).unwrap_or_default())),
+                name: computed(move || crate::print::file_name("レジ管理表", &sheet.date.get(), &sheet.date.get())),
+                landscape: computed(move || sheet.day.with(|d| d.as_ref().is_none_or(crate::print::register_landscape))),
+            )
+            crate::print_ui::PeriodPrint(
+                token: sheet.token,
+                tenant: sheet.tenant,
+                kind: crate::print_ui::Kind::Register,
+                book_id: computed(move || sheet.book.with(|b| b.as_ref().map(|b| b.id.clone()))),
+                fallback: computed(|| None),
+                date: computed(move || sheet.date.get()),
+            )
         }
     }
 }

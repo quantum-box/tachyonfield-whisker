@@ -113,7 +113,7 @@ pub(crate) struct Ledger {
     /// 今の日が従来の帳簿に置いてあるか。保存も同じ所へする。
     legacy_origin: RwSignal<bool>,
     pub(crate) carried: RwSignal<Option<i64>>,
-    voucher_start: RwSignal<usize>,
+    pub(crate) voucher_start: RwSignal<usize>,
     load_error: RwSignal<String>,
     state: RwSignal<SaveState>,
     save_error: RwSignal<String>,
@@ -923,6 +923,28 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
                     ledger.update_now(true, |d| d.confirmed_at = None);
                 })
             }
+            crate::print_ui::DayPrint(
+                html: computed(move || {
+                    let fallback = ledger.book.with(|b| b.as_ref().map(|b| b.template.clone()));
+                    let start = ledger.voucher_start.get();
+                    ledger.day.with(|d| d.as_ref().map(|d| {
+                        crate::print::document(&crate::print::file_name("出納帳", &d.date, &d.date), &[crate::print::cash_book_page(d, fallback.as_ref(), start)], crate::print::cash_landscape(d, fallback.as_ref()))
+                    }).unwrap_or_default())
+                }),
+                name: computed(move || crate::print::file_name("出納帳", &ledger.date.get(), &ledger.date.get())),
+                landscape: computed(move || {
+                    let fallback = ledger.book.with(|b| b.as_ref().map(|b| b.template.clone()));
+                    ledger.day.with(|d| d.as_ref().is_some_and(|d| crate::print::cash_landscape(d, fallback.as_ref())))
+                }),
+            )
+            crate::print_ui::PeriodPrint(
+                token: ledger.token,
+                tenant: ledger.tenant,
+                kind: crate::print_ui::Kind::Cash,
+                book_id: computed(move || ledger.book.with(|b| b.as_ref().map(|b| b.id.clone()))),
+                fallback: computed(move || ledger.book.with(|b| b.as_ref().map(|b| b.template.clone()))),
+                date: computed(move || ledger.date.get()),
+            )
         }
     }
 }

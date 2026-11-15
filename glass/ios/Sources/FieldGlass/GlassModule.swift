@@ -78,6 +78,21 @@ public final class GlassModule: Module {
             View("field-glass:AttachButton", FieldAttachButtonView.self) {
                 Events("pick")
             }
+            View("field-glass:PrintButton", FieldPrintButtonView.self) {
+                Prop("label") { (view: FieldPrintButtonView, value: WhiskerValue) in
+                    view.setLabel(value.asString ?? "")
+                }
+                Prop("html") { (view: FieldPrintButtonView, value: WhiskerValue) in
+                    view.setHtml(value.asString ?? "")
+                }
+                Prop("name") { (view: FieldPrintButtonView, value: WhiskerValue) in
+                    view.setName(value.asString ?? "")
+                }
+                Prop("landscape") { (view: FieldPrintButtonView, value: WhiskerValue) in
+                    view.setLandscape(value.asBool ?? (value.asString == "true"))
+                }
+                Events("done")
+            }
             View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
                 Events("change")
             }
