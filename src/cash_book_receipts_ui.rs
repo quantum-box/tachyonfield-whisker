@@ -434,7 +434,7 @@ impl Receipts {
         self.message.set(String::new());
         spawn_in(self.owner, async move {
             let result = authed(self.ledger.token, move |access| {
-                let uploaded = api::upload_receipt(access, &tenant, &name, &content_type, &bytes, "unsorted")?;
+                let uploaded = api::upload_receipt(access, &tenant, &name, &content_type, &bytes, "unsorted", None)?;
                 let id = uploaded["id"].as_str().ok_or("アップロードできませんでした。")?.to_owned();
                 let mut receipt = uploaded;
                 let mut sort_wait = 0;

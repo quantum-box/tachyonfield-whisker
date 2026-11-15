@@ -93,6 +93,11 @@ public final class GlassModule: Module {
                 }
                 Events("done")
             }
+            View("field-glass:DocumentPreview", FieldDocumentPreviewView.self) {
+                Prop("url") { (view: FieldDocumentPreviewView, value: WhiskerValue) in
+                    view.setUrl(value.asString ?? "")
+                }
+            }
             View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
                 Events("change")
             }

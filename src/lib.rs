@@ -20,6 +20,8 @@ mod features;
 mod markdown;
 mod print;
 mod print_ui;
+mod receipt_ocr;
+mod receipt_ocr_screen;
 mod register_count;
 mod register_count_import;
 mod register_count_screen;
@@ -772,6 +774,11 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                                 register_count_screen::RegisterCountScreen(token: token, tenant: tenant)
                             };
                         }
+                        if feature.path == features::RECEIPTS.path {
+                            return render! {
+                                receipt_ocr_screen::ReceiptOcrScreen(token: token, tenant: tenant)
+                            };
+                        }
                         if feature.is_screen() {
                             return render! {
                                 cash_book_screen::CashBookScreen(token: token, tenant: tenant)
@@ -870,6 +877,7 @@ fn feature_symbol(label: &str) -> &'static str {
         "請求書" => "yensign",
         "経費" => "creditcard.fill",
         "現金出納帳" => "banknote.fill",
+        "証憑OCR" => "doc.text.viewfinder",
         "レジ締め" => "dollarsign.arrow.circlepath",
         _ => "square.fill",
     }
@@ -885,6 +893,7 @@ fn area_symbol(name: &str) -> &'static str {
         "商品・仕入" => "shippingbox",
         "請求・経費" => "yensign.circle",
         "現金" => "banknote",
+        "証憑・仕訳" => "doc.text.magnifyingglass",
         _ => "square.grid.2x2",
     }
 }
