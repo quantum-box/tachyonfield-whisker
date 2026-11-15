@@ -9,6 +9,7 @@
 mod agent;
 mod api;
 mod attachments;
+mod cache;
 mod features;
 mod markdown;
 mod storage;
@@ -1548,12 +1549,20 @@ fn load_list(
     let Some(current) = tenant.get_untracked() else {
         return;
     };
+    // 前に読んだ中身があれば、取り直しを待たずにすぐ出す。
+    if items.with_untracked(Vec::is_empty) {
+        if let Some(Value::Array(list)) = cache::get(&current, feature.path) {
+            items.set(list);
+            loading.set(false);
+        }
+    }
     spawn_local(async move {
         let result = authed(token, move |access| {
             let mut list = api::fetch_list(access, &current, feature.path, feature.list_key)?;
             if feature.path.starts_with("/v1/erp/deals") {
                 api::resolve_pipelines(access, &current, &mut list);
             }
+            cache::put(&current, feature.path, &Value::Array(list.clone()));
             Ok(list)
         })
         .await;
@@ -1753,9 +1762,17 @@ fn item_detail(
         let id = features::id(&record.get_untracked());
         if !id.is_empty() {
             let path = template.replace("{id}", &id);
+            // 前に開いたことがあれば、その中身をすぐ出す。
+            if let Some(full) = cache::get(&current, &path).filter(Value::is_object) {
+                record.set(full);
+            }
             spawn_local(async move {
                 let result = authed(token, move |access| {
-                    api::fetch_record(access, &current, &path)
+                    let full = api::fetch_record(access, &current, &path)?;
+                    if full.is_object() {
+                        cache::put(&current, &path, &full);
+                    }
+                    Ok(full)
                 })
                 .await;
                 if let Ok(full) = result {

@@ -51,8 +51,9 @@ pub fn forget_tenant() {
     remove(TENANT);
 }
 
-/// サインアウト：保存したものを全部消す。
+/// サインアウト：保存したものを全部消す（覚えておいた一覧・詳細も）。
 pub fn forget_all() {
+    crate::cache::clear();
     remove(REFRESH_TOKEN);
     remove(TENANT);
 }
