@@ -520,10 +520,11 @@ pub fn product_sales(
         };
         *quantities.entry(row.key.clone()).or_insert(0) += q;
         *amounts.entry(row.key.clone()).or_insert(0) += if row.effect == "subtract" { -a } else { a };
-        if quantities[&row.key] < 0 {
-            return Err("販売数または金額を集計できません。売上台帳の内容を確認してください。".into());
-        }
         matched += 1;
+    }
+    // 返品が先に並んでいても数えられるよう、負かどうかは全部足してから見る。
+    if quantities.values().chain(amounts.values()).any(|v| *v < 0) {
+        return Err("販売数または金額を集計できません。売上台帳の内容を確認してください。".into());
     }
     Ok((quantities, amounts, unmatched, matched))
 }
@@ -645,6 +646,20 @@ mod tests {
         assert_eq!(result.sales["payout"], Some(300));
         assert_eq!(result.customer_count, Some(7));
         assert!(!result.payment_needs_review);
+    }
+
+    #[test]
+    fn product_sales_accept_refunds_in_any_order() {
+        let mut t = default_template();
+        t["rows"][0]["quantity"] = json!(true);
+        t["rules"] = json!([{ "text": "ラテ", "target": "sales" }]);
+        let template = Template::from_value(&t).unwrap();
+        let mut day = Day::empty("2026-11-16", json!({ "label": "x", "template": t }));
+        day.receipt_ids = vec!["r".into()];
+        let entry = |q: i64, a: i64| json!({ "date": "2026-11-16", "status": "confirmed", "receiptId": "r", "productName": "ラテ", "quantity": q, "totalAmount": a });
+        let (q, a, _, matched) = product_sales(&day, &template, &[entry(-1, -500), entry(2, 1000)]).unwrap();
+        assert_eq!((q["sales"], a["sales"], matched), (1, 500, 2));
+        assert!(product_sales(&day, &template, &[entry(-1, -500)]).is_err());
     }
 
     #[test]
