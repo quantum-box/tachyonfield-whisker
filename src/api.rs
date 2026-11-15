@@ -551,10 +551,16 @@ pub fn upload_receipt(
     content_type: &str,
     bytes: &[u8],
     receipt_type: &str,
+    payer_kind: Option<&str>,
 ) -> Result<Value, String> {
     let boundary = format!("----whisker{:x}", bytes.len() ^ 0x5eed_cafe);
     let safe_name: String = name.chars().filter(|c| *c != '"' && *c != '\r' && *c != '\n').collect();
     let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 512);
+    if let Some(payer) = payer_kind {
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"payer_kind\"\r\n\r\n{payer}\r\n").as_bytes(),
+        );
+    }
     body.extend_from_slice(
         format!(
             "--{boundary}\r\nContent-Disposition: form-data; name=\"receipt_type\"\r\n\r\n{receipt_type}\r\n\
@@ -575,6 +581,133 @@ pub fn upload_receipt(
         })?
         .into_json()
         .map_err(|e| format!("応答を読めません: {e}"))
+}
+
+/// 証憑OCRの一覧（新しい順に 200 件まで）。`receipt_type` / `status` は空なら絞らない。
+pub fn search_receipts(
+    token: &str,
+    tenant: &Tenant,
+    receipt_type: &str,
+    status: &str,
+    unprocessed: bool,
+) -> Result<(Vec<Value>, bool), String> {
+    let mut query = Vec::new();
+    if !receipt_type.is_empty() {
+        query.push(format!("receipt_type={}", encode_query(receipt_type)));
+    }
+    if !status.is_empty() {
+        query.push(format!("status={}", encode_query(status)));
+    }
+    if unprocessed {
+        query.push("unprocessed=true".to_owned());
+    }
+    let path = if query.is_empty() {
+        "/v1/field/receipts".to_owned()
+    } else {
+        format!("/v1/field/receipts?{}", query.join("&"))
+    };
+    let mut body = fetch_record(token, tenant, &path)?;
+    match body["items"].take() {
+        Value::Array(items) => {
+            let truncated = items.len() >= 200;
+            Ok((items, truncated))
+        }
+        _ => Err("応答の形が想定と違います".into()),
+    }
+}
+
+/// 証憑を読み直す。`receipt_type` を渡すと、その種別に変えて読み直す。
+pub fn reprocess_receipt(
+    token: &str,
+    tenant: &Tenant,
+    id: &str,
+    receipt_type: Option<&str>,
+) -> Result<Value, String> {
+    let body = match receipt_type {
+        Some(t) => json!({ "receiptType": t }),
+        None => json!({}),
+    };
+    send_json(
+        token,
+        tenant,
+        "POST",
+        &format!("/v1/field/receipts/{}/reprocess", encode_query(id)),
+        &body,
+        Duration::from_secs(120),
+    )
+}
+
+/// 重複候補の証憑を、別の取引として登録する。
+pub fn confirm_distinct_receipt(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "POST",
+        &format!("/v1/field/receipts/{}/confirm-distinct", encode_query(id)),
+        &json!({}),
+        Duration::from_secs(30),
+    )
+}
+
+/// 使える経費科目 `(id, 名前)`。
+pub fn expense_categories(token: &str, tenant: &Tenant) -> Result<Vec<(String, String)>, String> {
+    let body = fetch_record(token, tenant, "/v1/erp/expense-categories")?;
+    Ok(body["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["isActive"].as_bool().unwrap_or(true))
+        .filter_map(|c| {
+            Some((
+                c["id"].as_str()?.to_owned(),
+                c["name"].as_str().unwrap_or("").to_owned(),
+            ))
+        })
+        .collect())
+}
+
+/// 証憑から経費を起票する（何度呼んでも 1 件）。`{ created, expense, receipt }` が返る。
+pub fn book_receipt_expense(
+    token: &str,
+    tenant: &Tenant,
+    id: &str,
+    input: &Value,
+) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "POST",
+        &format!("/v1/field/receipts/{}/expense", encode_query(id)),
+        input,
+        Duration::from_secs(30),
+    )
+}
+
+/// 証憑を仕入台帳（`sales` なら売上台帳）へ反映する。反映した件数を返す。
+pub fn ledger_from_receipt(
+    token: &str,
+    tenant: &Tenant,
+    id: &str,
+    sales: bool,
+) -> Result<usize, String> {
+    let base = if sales {
+        "/v1/sales-ledger"
+    } else {
+        "/v1/purchase-ledger"
+    };
+    let value = send_json(
+        token,
+        tenant,
+        "POST",
+        &format!("{base}/from-receipt/{}", encode_query(id)),
+        &json!({}),
+        Duration::from_secs(30),
+    )?;
+    Ok(if sales {
+        value["items"].as_array().map_or(0, Vec::len)
+    } else {
+        value["createdCount"].as_u64().unwrap_or(0) as usize
+    })
 }
 
 /// レシートの読み取りを直す（金額・支払先・日付など）。直したレシートが返る。

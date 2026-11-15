@@ -516,7 +516,7 @@ pub(crate) fn wait_save(slot: u64) -> Option<i64> {
     None
 }
 
-async fn sleep(duration: Duration) {
+pub(crate) async fn sleep(duration: Duration) {
     run_blocking(move || std::thread::sleep(duration)).await;
 }
 

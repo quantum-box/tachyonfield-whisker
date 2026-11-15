@@ -112,7 +112,7 @@ pub(crate) fn sales_import(sheet: Sheet) -> Element {
         message.set(String::new());
         spawn_in(owner, async move {
             let result = authed(sheet.token, move |access| {
-                let uploaded = api::upload_receipt(access, &tenant, &name, &content_type, &bytes, "unsorted")?;
+                let uploaded = api::upload_receipt(access, &tenant, &name, &content_type, &bytes, "unsorted", None)?;
                 let id = uploaded["id"].as_str().ok_or("アップロードできませんでした。")?.to_owned();
                 let mut value = uploaded;
                 let mut sort_wait = 0;

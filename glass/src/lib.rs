@@ -39,6 +39,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_backdrop_schema::element_provider(),
             native_attach_button_schema::element_provider(),
             native_print_button_schema::element_provider(),
+            native_document_preview_schema::element_provider(),
         ],
     )
 }
@@ -548,5 +549,26 @@ pub fn print_button(
     style: Style,
 ) -> Element {
     let _ = (&label, &html, &name, &landscape, &style);
+    render! { View() }
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:DocumentPreview", measurement = None)]
+pub fn native_document_preview(url: Signal<String>, style: Style) {}
+
+/// 証憑の原本（写真・PDF）を出す枠。`url` が https のときだけ読む。iOS 以外は何も出さない。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn document_preview(url: Signal<String>, style: Style) -> Element {
+    NativeDocumentPreview::builder()
+        .url(url)
+        .style(style.clone())
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn document_preview(url: Signal<String>, style: Style) -> Element {
+    let _ = (&url, &style);
     render! { View() }
 }

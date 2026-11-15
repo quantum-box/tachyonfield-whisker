@@ -206,6 +206,19 @@ pub const REGISTER_COUNT: Feature = Feature {
     detail_path: None,
 };
 
+/// 証憑OCR。専用の画面。
+pub const RECEIPTS: Feature = Feature {
+    label: "証憑OCR",
+    path: "screen:receipts",
+    list_key: "",
+    title: &[],
+    subtitle: &[],
+    trailing: None,
+    avatar: false,
+    color: GREEN,
+    detail_path: None,
+};
+
 impl Feature {
     /// 一覧ではなく専用の画面を開く機能か。
     pub fn is_screen(&self) -> bool {
@@ -221,6 +234,7 @@ pub const MENU: &[(&str, &[Feature])] = &[
     ("商品・仕入", &[PRODUCTS, PURCHASE_ORDERS]),
     ("請求・経費", &[INVOICES, EXPENSES]),
     ("現金", &[CASH_BOOK, REGISTER_COUNT]),
+    ("証憑・仕訳", &[RECEIPTS]),
 ];
 
 #[derive(Clone, Copy)]
