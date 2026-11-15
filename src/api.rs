@@ -351,6 +351,117 @@ pub fn cash_book_settings(token: &str, tenant: &Tenant) -> Result<Option<Value>,
     }
 }
 
+/// JSON を送って JSON を受け取る（PUT / POST）。
+pub fn send_json(
+    token: &str,
+    tenant: &Tenant,
+    method: &str,
+    path: &str,
+    body: &Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .build()
+        .request(method, &format!("{FIELD_API_BASE_URL}{path}"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("x-operator-id", &tenant.id)
+        .set("x-platform-id", &tenant.platform_id)
+        .set("Accept", "application/json")
+        .set("Content-Type", "application/json")
+        .send_json(body.clone())
+        .map_err(|error| match error {
+            ureq::Error::Status(409, _) => {
+                "ほかの端末で設定が保存されました。読み直してから入れ直してください。".into()
+            }
+            other => describe_error(other),
+        })?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
+/// 帳簿設定を保存し、保存後の設定（`{ data, version }`）を返す。
+pub fn save_cash_book_settings(
+    token: &str,
+    tenant: &Tenant,
+    data: &Value,
+    expected_version: i64,
+) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "PUT",
+        "/v1/field/cash-book/settings",
+        &json!({ "data": data, "expectedVersion": expected_version }),
+        Duration::from_secs(15),
+    )
+}
+
+/// 店舗マスタ（帳簿を足すときに選ぶ）。
+pub fn inventory_stores(token: &str, tenant: &Tenant) -> Result<Vec<Value>, String> {
+    fetch_list(token, tenant, "/v1/field/inventory/stores", "items")
+}
+
+/// 店舗マスタに店舗を 1 つ登録する（帳簿を足すには店舗が要る）。
+pub fn create_store(token: &str, tenant: &Tenant, name: &str) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "POST",
+        "/v1/field/inventory/stores",
+        &json!({ "name": name, "address": null, "businessHours": null, "posLocationId": null }),
+        Duration::from_secs(15),
+    )
+}
+
+/// 商品マスタを探す（売上項目との連携に使う）。`(商品, 続きがあるか)`。
+pub fn search_products(
+    token: &str,
+    tenant: &Tenant,
+    query: &str,
+    offset: usize,
+) -> Result<(Vec<Value>, bool), String> {
+    let mut path = format!("/v1/order/products?limit=20&offset={offset}");
+    if !query.trim().is_empty() {
+        path.push_str("&q=");
+        path.push_str(&encode_query(query.trim()));
+    }
+    let mut body = fetch_record(token, tenant, &path)?;
+    let more = body["hasNextPage"].as_bool().unwrap_or(false);
+    match body["items"].take() {
+        Value::Array(items) => Ok((items, more)),
+        _ => Err("応答の形が想定と違います".into()),
+    }
+}
+
+/// 印刷形式の案を AI に作ってもらう。`document` は参考帳票（base64 と PDF のページ）。
+pub fn suggest_cash_book_print(
+    token: &str,
+    tenant: &Tenant,
+    instructions: &str,
+    current: &Value,
+    document: Option<(String, Option<u32>)>,
+) -> Result<Value, String> {
+    let mut body = json!({ "instructions": instructions, "current": current });
+    let timeout = if let Some((base64, page)) = document {
+        body["document"] = json!({ "base64": base64 });
+        if let Some(page) = page {
+            body["document"]["page"] = json!(page);
+        }
+        Duration::from_secs(90)
+    } else {
+        Duration::from_secs(30)
+    };
+    send_json(
+        token,
+        tenant,
+        "POST",
+        "/v1/field/cash-book/print-suggestions",
+        &body,
+        timeout,
+    )
+}
+
 /// 現金出納帳の日を `from`〜`to`（両端を含む、92 日まで）読む。
 /// `book_id` が無ければ従来の帳簿（店舗・レジを分ける前）。
 pub fn cash_book_days(

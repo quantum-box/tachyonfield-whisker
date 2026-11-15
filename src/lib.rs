@@ -12,6 +12,8 @@ mod attachments;
 mod cache;
 mod cash_book;
 mod cash_book_screen;
+mod cash_book_settings;
+mod cash_book_settings_screen;
 mod features;
 mod markdown;
 mod storage;

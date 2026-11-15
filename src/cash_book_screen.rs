@@ -14,6 +14,50 @@ use super::*;
 use crate::api::SaveError;
 use crate::cash_book::{self as model, Book, Day, Expense, SavedDay, Template};
 
+/// いま打っている入力欄。キーボードの上の「完了」で閉じるのに使う（数字のキーボードには閉じるキーが無い）。
+#[derive(Clone, Copy)]
+pub(crate) struct Focused(pub RwSignal<Option<InputRef>>);
+
+/// 入力欄が選ばれたら覚えておく。
+pub(crate) fn remember_focus(input: InputRef) {
+    if let Some(Focused(current)) = use_context::<Focused>() {
+        current.set(Some(input));
+    }
+}
+
+/// キーボードの上に出す「完了」。押すと、いま打っている欄を閉じる。
+#[component]
+pub(crate) fn keyboard_done(focused: RwSignal<Option<InputRef>>) -> Element {
+    let keyboard = signal(0.0_f32);
+    // 高さ 0 の板を画面の下端に置き、その上に「完了」を浮かせる（下の画面のタップを邪魔しない）。
+    render! {
+        View(
+            style: css!(position: PositionKind::Absolute, left: px(0), right: px(0), bottom: px(0), height: px(0)).z_index(40),
+        ) {
+        KeyboardObserver(on_change: move |height: f32| keyboard.set(height))
+        Show(when: move || keyboard.get() > 0.0) {
+            View(
+                style: computed(move || css!(
+                    position: PositionKind::Absolute,
+                    right: px(12),
+                    bottom: px(keyboard.get() + 8.0),
+                    padding: (px(8), px(18)),
+                    border_radius: px(18),
+                    background_color: hex(TINT),
+                ).z_index(40)),
+                on_tap: move |_| {
+                    if let Some(input) = focused.get_untracked() {
+                        input.blur();
+                    }
+                },
+            ) {
+                Text(value: "完了", style: css!(color: Color::hex(0xFFFFFF), font_size: px(16), font_weight: FontWeight::Numeric(600)))
+            }
+        }
+        }
+    }
+}
+
 /// 前日残高の引き継ぎと証番に見る日数（Web 版の HISTORY_DAYS）。
 const HISTORY_DAYS: i64 = 62;
 /// 入力が止まってから保存するまで。
@@ -406,6 +450,9 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
         saving: signal(false),
     };
     let choosing_book = signal(false);
+    let settings_open = signal(false);
+    let focused = signal(None::<InputRef>);
+    provide_context(Focused(focused));
 
     let load_books = move || {
         books.set(Books::Loading);
@@ -494,13 +541,18 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
     });
 
     render! {
+        View(style: css!(position: PositionKind::Relative, flex_grow: 1.0, display: Display::Flex, flex_direction: FlexDirection::Column).flex_basis(px(0)).min_height(px(0))) {
+        KeyboardDone(focused: focused)
         View(style: screen_style()) {
             NavBar(
                 title: "現金出納帳",
                 back_label: "",
                 on_back: |_| {},
-                action_label: "",
-                on_action: |_| {},
+                action_label: "帳簿設定",
+                on_action: move |_| {
+                    ledger.flush();
+                    settings_open.set(true);
+                },
             )
             ScrollView(style: scroll_style()) {
                 View(style: scroll_content_style().padding_bottom(px(120))) {
@@ -541,6 +593,22 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
                     }
                 }
             }
+        }
+        Show(when: move || settings_open.get()) {
+            View(
+                style: css!(position: PositionKind::Absolute, top: px(0), bottom: px(0), left: px(0), right: px(0), display: Display::Flex, flex_direction: FlexDirection::Column)
+                    .z_index(20),
+            ) {
+                crate::cash_book_settings_screen::CashBookSettingsScreen(
+                    token: token,
+                    tenant: tenant,
+                    on_close: move |_| {
+                        settings_open.set(false);
+                        load_books();
+                    },
+                )
+            }
+        }
         }
     }
 }
@@ -967,9 +1035,10 @@ fn expense_card(ledger: Ledger, id: String, locked: bool) -> Element {
 
 /// 左に名前、右に金額の入力欄。打つたびに読み、読めない文字のときは赤く知らせる。
 #[component]
-fn amount_row(label: Signal<String>, initial: String, editable: bool, on_amount: Callback<Option<i64>>) -> Element {
+pub(crate) fn amount_row(label: Signal<String>, initial: String, editable: bool, on_amount: Callback<Option<i64>>) -> Element {
     let text = signal(initial.clone());
     let invalid = signal(false);
+    let input = InputRef::new();
     render! {
         View(
             style: css!(
@@ -993,6 +1062,8 @@ fn amount_row(label: Signal<String>, initial: String, editable: bool, on_amount:
                 placeholder: "0",
                 keyboard_type: KeyboardType::Number,
                 editable: editable,
+                input_ref: input,
+                on_focus: move |_| remember_focus(input),
                 on_input: move |value: String| match model::parse_yen(&value) {
                     Ok(amount) => {
                         invalid.set(false);
@@ -1023,7 +1094,8 @@ fn amount_row(label: Signal<String>, initial: String, editable: bool, on_amount:
 
 /// 左に名前、右に文字の入力欄。
 #[component]
-fn text_row(label: &'static str, text: RwSignal<String>, editable: bool, on_text: Callback<String>) -> Element {
+pub(crate) fn text_row(label: &'static str, text: RwSignal<String>, editable: bool, on_text: Callback<String>) -> Element {
+    let input = InputRef::new();
     render! {
         View(
             style: css!(
@@ -1040,6 +1112,9 @@ fn text_row(label: &'static str, text: RwSignal<String>, editable: bool, on_text
                 text: text,
                 placeholder: "未入力",
                 editable: editable,
+                input_ref: input,
+                on_focus: move |_| remember_focus(input),
+                on_submit: move |_| input.blur(),
                 on_input: move |value: String| on_text.run(value),
                 style: css!(
                     flex_grow: 1.0,
@@ -1056,7 +1131,7 @@ fn text_row(label: &'static str, text: RwSignal<String>, editable: bool, on_text
 
 /// 合計の行（打てない）。
 #[component]
-fn total_row(label: &'static str, amount: Signal<i64>) -> Element {
+pub(crate) fn total_row(label: &'static str, amount: Signal<i64>) -> Element {
     render! {
         View(
             style: css!(
@@ -1080,7 +1155,7 @@ fn total_row(label: &'static str, amount: Signal<i64>) -> Element {
 
 /// 押せる行：左に名前、右に青い文字。
 #[component]
-fn field_row(label: Signal<String>, value: Signal<String>, on_tap: Callback<()>) -> Element {
+pub(crate) fn field_row(label: Signal<String>, value: Signal<String>, on_tap: Callback<()>) -> Element {
     render! {
         View(
             style: css!(
@@ -1107,7 +1182,7 @@ fn field_row(label: Signal<String>, value: Signal<String>, on_tap: Callback<()>)
 
 /// 角の丸い青い文字のボタン（白い板の上）。
 #[component]
-fn button(label: &'static str, on_tap: Callback<()>) -> Element {
+pub(crate) fn button(label: &'static str, on_tap: Callback<()>) -> Element {
     render! {
         View(
             style: group_style().margin_top(px(12)),
