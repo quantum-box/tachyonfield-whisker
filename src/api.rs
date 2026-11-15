@@ -331,6 +331,420 @@ pub fn fetch_record(token: &str, tenant: &Tenant, path: &str) -> Result<Value, S
         .map_err(|e| format!("応答を読めません: {e}"))
 }
 
+/// 現金出納帳の帳簿設定。まだ設定の API が無い環境（404）では `None`。
+pub fn cash_book_settings(token: &str, tenant: &Tenant) -> Result<Option<Value>, String> {
+    match field_request(
+        "GET",
+        "/v1/field/cash-book/settings",
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .call()
+    {
+        Ok(response) => response
+            .into_json()
+            .map(Some)
+            .map_err(|e| format!("応答を読めません: {e}")),
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(error) => Err(describe_error(error)),
+    }
+}
+
+/// JSON を送って JSON を受け取る（PUT / POST）。
+pub fn send_json(
+    token: &str,
+    tenant: &Tenant,
+    method: &str,
+    path: &str,
+    body: &Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    ureq::AgentBuilder::new()
+        .timeout(timeout)
+        .build()
+        .request(method, &format!("{FIELD_API_BASE_URL}{path}"))
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("x-operator-id", &tenant.id)
+        .set("x-platform-id", &tenant.platform_id)
+        .set("Accept", "application/json")
+        .set("Content-Type", "application/json")
+        .send_json(body.clone())
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
+/// 帳簿設定を保存し、保存後の設定（`{ data, version }`）を返す。
+pub fn save_cash_book_settings(
+    token: &str,
+    tenant: &Tenant,
+    data: &Value,
+    expected_version: i64,
+) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "PUT",
+        "/v1/field/cash-book/settings",
+        &json!({ "data": data, "expectedVersion": expected_version }),
+        Duration::from_secs(15),
+    )
+    .map_err(|message| {
+        if message.contains("（409）") {
+            "ほかの端末で設定が保存されました。読み直してから入れ直してください。".into()
+        } else {
+            message
+        }
+    })
+}
+
+/// 店舗マスタ（帳簿を足すときに選ぶ）。
+pub fn inventory_stores(token: &str, tenant: &Tenant) -> Result<Vec<Value>, String> {
+    fetch_list(token, tenant, "/v1/field/inventory/stores", "items")
+}
+
+/// レジ管理表の日を読む（92 日まで）。返ってきた帳簿が頼んだものと違えば断る。
+pub fn register_count_days(
+    token: &str,
+    tenant: &Tenant,
+    from: &str,
+    to: &str,
+    book_id: &str,
+) -> Result<Value, String> {
+    let path = format!(
+        "/v1/field/register-counts/days?from={from}&to={to}&book_id={}",
+        encode_query(book_id)
+    );
+    let value = fetch_record(token, tenant, &path)?;
+    if value["bookId"].as_str() != Some(book_id) {
+        return Err(
+            "店舗・レジ別の記録を読み込めませんでした。しばらくしてから再読み込みしてください。".into(),
+        );
+    }
+    Ok(value)
+}
+
+/// レジ管理表の 1 日を保存し、新しい版を返す。
+pub fn save_register_count_day(
+    token: &str,
+    tenant: &Tenant,
+    date: &str,
+    data: &Value,
+    expected_version: Option<i64>,
+    book_id: &str,
+) -> Result<i64, SaveError> {
+    let body = json!({ "bookId": book_id, "data": data, "expectedVersion": expected_version });
+    let response = field_request(
+        "PUT",
+        &format!("/v1/field/register-counts/days/{date}"),
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .set("Content-Type", "application/json")
+    .send_json(body);
+    match response {
+        Ok(response) => {
+            let value: Value = response
+                .into_json()
+                .map_err(|e| SaveError::Other(format!("応答を読めません: {e}")))?;
+            value["version"]
+                .as_i64()
+                .ok_or_else(|| SaveError::Other("応答の形が想定と違います".into()))
+        }
+        Err(ureq::Error::Status(409, _)) => Err(SaveError::Conflict),
+        Err(error) => Err(SaveError::Other(describe_error(error))),
+    }
+}
+
+/// 売上台帳（確定済み、1 日分）。`receipt_id` を付けるとその伝票にひもづくものだけ。
+pub fn sales_ledger(token: &str, tenant: &Tenant, date: &str, receipt_id: &str) -> Result<Value, String> {
+    fetch_record(
+        token,
+        tenant,
+        &format!(
+            "/v1/sales-ledger?group_by=day&date_from={date}&date_to={date}&status=confirmed&receipt_id={}",
+            encode_query(receipt_id)
+        ),
+    )
+}
+
+/// 気象庁の予報（府県予報区ごとの JSON）。
+pub fn jma_forecast(office_code: &str) -> Result<Value, String> {
+    ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .get(&format!(
+            "https://www.jma.go.jp/bosai/forecast/data/forecast/{}.json",
+            encode_query(office_code)
+        ))
+        .call()
+        .map_err(|_| "天気を取得できませんでした。".to_owned())?
+        .into_json()
+        .map_err(|_| "天気を取得できませんでした。".to_owned())
+}
+
+/// レシートを種類ごとに読む（アップロードした日の範囲。1 回 200 件まで）。`(一覧, 打ち切られたか)`。
+pub fn list_receipts(
+    token: &str,
+    tenant: &Tenant,
+    receipt_type: &str,
+    from: &str,
+    to: &str,
+) -> Result<(Vec<Value>, bool), String> {
+    let path = format!(
+        "/v1/field/receipts?receipt_type={receipt_type}&date_from={}&date_to={}",
+        encode_query(&format!("{from}T00:00:00+09:00")),
+        encode_query(&format!("{to}T23:59:59+09:00")),
+    );
+    let mut body = fetch_record(token, tenant, &path)?;
+    match body["items"].take() {
+        Value::Array(items) => {
+            let truncated = items.len() >= 200;
+            Ok((items, truncated))
+        }
+        _ => Err("応答の形が想定と違います".into()),
+    }
+}
+
+/// 1 枚のレシート（読み取りが終わったか見るため）。
+pub fn get_receipt(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
+    fetch_record(token, tenant, &format!("/v1/field/receipts/{}", encode_query(id)))
+}
+
+/// どこかの出納帳（またはレジ管理表）にもう入っているレシート。
+pub fn receipt_uses(
+    token: &str,
+    tenant: &Tenant,
+    ids: &[String],
+    register_count: bool,
+) -> Result<Vec<String>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut body = json!({ "receiptIds": ids });
+    if register_count {
+        body["registerCount"] = json!(true);
+    }
+    let value = send_json(
+        token,
+        tenant,
+        "POST",
+        "/v1/field/cash-book/receipt-uses",
+        &body,
+        Duration::from_secs(15),
+    )?;
+    Ok(value["receiptIds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect())
+}
+
+/// レシートの写真・PDF を上げる（読み取りはサーバーで始まる）。同じファイルなら前のものが返る。
+pub fn upload_receipt(
+    token: &str,
+    tenant: &Tenant,
+    name: &str,
+    content_type: &str,
+    bytes: &[u8],
+    receipt_type: &str,
+) -> Result<Value, String> {
+    let boundary = format!("----whisker{:x}", bytes.len() ^ 0x5eed_cafe);
+    let safe_name: String = name.chars().filter(|c| *c != '"' && *c != '\r' && *c != '\n').collect();
+    let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 512);
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"receipt_type\"\r\n\r\n{receipt_type}\r\n\
+             --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{safe_name}\"\r\n\
+             Content-Type: {content_type}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    field_request("POST", "/v1/field/receipts/upload", token, &tenant.id, &tenant.platform_id)
+        .timeout(Duration::from_secs(60))
+        .set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+        .send_bytes(&body)
+        .map_err(|error| match error {
+            ureq::Error::Status(413, _) => "ファイルが大きすぎます。写真を小さくしてください".into(),
+            other => describe_error(other),
+        })?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
+/// レシートの読み取りを直す（金額・支払先・日付など）。直したレシートが返る。
+pub fn correct_receipt(token: &str, tenant: &Tenant, id: &str, reading: &Value) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "PATCH",
+        &format!("/v1/field/receipts/{}/reading", encode_query(id)),
+        reading,
+        Duration::from_secs(30),
+    )
+}
+
+/// 商品 1 つ（締めレシートを売上項目に振り分けるのに使う）。
+pub fn get_product(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
+    fetch_record(token, tenant, &format!("/v1/order/products/{}", encode_query(id)))
+}
+
+/// 店舗マスタに店舗を 1 つ登録する（帳簿を足すには店舗が要る）。
+pub fn create_store(token: &str, tenant: &Tenant, name: &str) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "POST",
+        "/v1/field/inventory/stores",
+        &json!({ "name": name, "address": null, "businessHours": null, "posLocationId": null }),
+        Duration::from_secs(15),
+    )
+}
+
+/// 商品マスタを探す（売上項目との連携に使う）。`(商品, 続きがあるか)`。
+pub fn search_products(
+    token: &str,
+    tenant: &Tenant,
+    query: &str,
+    offset: usize,
+) -> Result<(Vec<Value>, bool), String> {
+    let mut path = format!("/v1/order/products?limit=20&offset={offset}");
+    if !query.trim().is_empty() {
+        path.push_str("&q=");
+        path.push_str(&encode_query(query.trim()));
+    }
+    let mut body = fetch_record(token, tenant, &path)?;
+    let more = body["hasNextPage"].as_bool().unwrap_or(false);
+    match body["items"].take() {
+        Value::Array(items) => Ok((items, more)),
+        _ => Err("応答の形が想定と違います".into()),
+    }
+}
+
+/// 印刷形式の案を AI に作ってもらう。`document` は参考帳票（base64 と PDF のページ）。
+pub fn suggest_cash_book_print(
+    token: &str,
+    tenant: &Tenant,
+    instructions: &str,
+    current: &Value,
+    document: Option<(String, Option<u32>)>,
+) -> Result<Value, String> {
+    let mut body = json!({ "instructions": instructions, "current": current });
+    let timeout = if let Some((base64, page)) = document {
+        body["document"] = json!({ "base64": base64 });
+        if let Some(page) = page {
+            body["document"]["page"] = json!(page);
+        }
+        Duration::from_secs(90)
+    } else {
+        Duration::from_secs(30)
+    };
+    send_json(
+        token,
+        tenant,
+        "POST",
+        "/v1/field/cash-book/print-suggestions",
+        &body,
+        timeout,
+    )
+}
+
+/// 現金出納帳の日を `from`〜`to`（両端を含む、92 日まで）読む。
+/// `book_id` が無ければ従来の帳簿（店舗・レジを分ける前）。
+pub fn cash_book_days(
+    token: &str,
+    tenant: &Tenant,
+    from: &str,
+    to: &str,
+    book_id: Option<&str>,
+) -> Result<Value, String> {
+    let mut path = format!("/v1/field/cash-book/days?from={from}&to={to}");
+    if let Some(id) = book_id {
+        path.push_str("&book_id=");
+        path.push_str(&encode_query(id));
+    }
+    fetch_record(token, tenant, &path)
+}
+
+/// 出納帳の保存が断られた理由。
+#[derive(Clone, Debug, PartialEq)]
+pub enum SaveError {
+    /// ほかの端末が先にこの日を保存した（版が合わない）。
+    Conflict,
+    /// 行に入れたレシートが、すでにほかの日（`date`）の出納帳に入っている。
+    ReceiptUsed { receipt_id: String, date: String },
+    Other(String),
+}
+
+/// 現金出納帳の 1 日を保存し、新しい版を返す。`expected_version` は編集を始めたときの版
+/// （一度も保存していない日は `None`）。合わなければ `SaveError::Conflict`。
+pub fn save_cash_book_day(
+    token: &str,
+    tenant: &Tenant,
+    date: &str,
+    data: &Value,
+    expected_version: Option<i64>,
+    book_id: Option<&str>,
+) -> Result<i64, SaveError> {
+    let mut body = json!({ "data": data, "expectedVersion": expected_version });
+    if let Some(id) = book_id {
+        body["bookId"] = json!(id);
+    }
+    let response = field_request(
+        "PUT",
+        &format!("/v1/field/cash-book/days/{date}"),
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .set("Content-Type", "application/json")
+    .send_json(body);
+    match response {
+        Ok(response) => {
+            let value: Value = response
+                .into_json()
+                .map_err(|e| SaveError::Other(format!("応答を読めません: {e}")))?;
+            value["version"]
+                .as_i64()
+                .ok_or_else(|| SaveError::Other("応答の形が想定と違います".into()))
+        }
+        Err(ureq::Error::Status(409, response)) => {
+            let body: Value = response.into_json().unwrap_or(Value::Null);
+            Err(receipt_used(body["message"].as_str().unwrap_or(""))
+                .map_or(SaveError::Conflict, |(receipt_id, date)| {
+                    SaveError::ReceiptUsed { receipt_id, date }
+                }))
+        }
+        Err(error) => Err(SaveError::Other(describe_error(error))),
+    }
+}
+
+/// サーバーの文言（cash_book_api.rs の receipt_used_message）からレシートと日を取り出す。
+fn receipt_used(message: &str) -> Option<(String, String)> {
+    let rest = message.split("receipt ").nth(1)?;
+    let (receipt_id, rest) = rest.split_once(" is already on the cash book for ")?;
+    let date: String = rest.chars().take(10).collect();
+    let valid = date.len() == 10 && date.chars().filter(|c| *c == '-').count() == 2;
+    valid.then(|| (receipt_id.to_owned(), date))
+}
+
+fn encode_query(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 /// Field Agent の execute だけを流す Worker。本番 API は応答をため込む（Lambda）ので、
 /// Web 版（apps/client/src/api/field-stream-url.ts）と同じくこちらへ送る。
 const AGENT_STREAM_BASE_URL: &str = "https://field-agent-stream.txcloud.app";
@@ -574,4 +988,17 @@ fn attachment_id(response: &Value) -> Result<String, String> {
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| "ファイルの置き場所が返ってきませんでした".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_receipt_used_message() {
+        let message = "receipt rc_01abc is already on the cash book for 2026-11-03; remove it from that day first";
+        assert_eq!(receipt_used(message), Some(("rc_01abc".into(), "2026-11-03".into())));
+        assert_eq!(receipt_used("expectedVersion does not match"), None);
+        assert_eq!(encode_query("a b/é"), "a%20b%2F%C3%A9");
+    }
 }

@@ -10,8 +10,20 @@ mod agent;
 mod api;
 mod attachments;
 mod cache;
+mod cash_book;
+mod cash_book_receipts;
+mod cash_book_receipts_ui;
+mod cash_book_screen;
+mod cash_book_settings;
+mod cash_book_settings_screen;
 mod features;
 mod markdown;
+mod print;
+mod print_ui;
+mod register_count;
+mod register_count_import;
+mod register_count_screen;
+mod register_count_settings;
 mod storage;
 
 use agent::AgentScreen;
@@ -755,6 +767,16 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                     children: move |k: ReadSignal<(usize, usize)>| {
                         let (a, i) = k.get_untracked();
                         let feature = area_features(a)[i];
+                        if feature.path == features::REGISTER_COUNT.path {
+                            return render! {
+                                register_count_screen::RegisterCountScreen(token: token, tenant: tenant)
+                            };
+                        }
+                        if feature.is_screen() {
+                            return render! {
+                                cash_book_screen::CashBookScreen(token: token, tenant: tenant)
+                            };
+                        }
                         render! {
                             FeatureList(
                                 token: token,
@@ -847,6 +869,8 @@ fn feature_symbol(label: &str) -> &'static str {
         "発注書" => "doc.text.fill",
         "請求書" => "yensign",
         "経費" => "creditcard.fill",
+        "現金出納帳" => "banknote.fill",
+        "レジ締め" => "dollarsign.arrow.circlepath",
         _ => "square.fill",
     }
 }
@@ -860,6 +884,7 @@ fn area_symbol(name: &str) -> &'static str {
         "予約・人事" => "calendar",
         "商品・仕入" => "shippingbox",
         "請求・経費" => "yensign.circle",
+        "現金" => "banknote",
         _ => "square.grid.2x2",
     }
 }
