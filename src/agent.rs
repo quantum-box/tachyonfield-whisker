@@ -251,8 +251,13 @@ pub fn agent_screen(
         let Some(current) = tenant.get_untracked() else {
             return;
         };
-        // 文なしでファイルだけ送ったときは、中身を見てもらう。
-        let task = if typed.is_empty() { "添付したファイルを見てください".to_owned() } else { typed.clone() };
+        // 文なしでファイルだけ送ったときは、中身の要点を聞く。
+        // 「保存しないで」とは書かない。請求書や領収書は証憑OCR に上げないと Agent が読めないため。
+        let task = if typed.is_empty() {
+            "添付したファイルの中身を読んで、要点を教えてください。".to_owned()
+        } else {
+            typed.clone()
+        };
         draft.set(String::new());
         chat.pending.set(Vec::new());
         chat.turn.set(chat.turn.get_untracked() + 1);
