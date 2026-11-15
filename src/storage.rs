@@ -4,6 +4,7 @@
 //! - 長く使える更新用のキー（リフレッシュトークン）。次回起動時に
 //!   これでアクセストークンを取り直し、パスワードなしで入れる。
 //! - 選んだテナント（ID・名前・環境）。
+//! - ピン留めした会社の ID（サインアウトしても残す。使えない会社の ID は画面で無視する）。
 //!
 //! アクセストークン（1 時間で切れる）とパスワードは保存しない。
 //! 保存に失敗しても、今回のサインインはそのまま使えるようにする。
@@ -15,6 +16,8 @@ use crate::api::Tenant;
 const SERVICE: &str = "app.txcloud.tachyonfield.whisker";
 const REFRESH_TOKEN: &str = "cognito-refresh-token";
 const TENANT: &str = "selected-tenant";
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+const PINNED: &str = "pinned-tenants";
 
 pub fn refresh_token() -> Option<String> {
     read(REFRESH_TOKEN)
@@ -43,6 +46,19 @@ pub fn save_tenant(tenant: &Tenant) {
         "platformId": tenant.platform_id,
     });
     write(TENANT, &value.to_string());
+}
+
+/// ピン留めした会社の ID（ピン留めした順）。iOS の会社の切り替えシートで使う。
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub fn pinned_tenants() -> Vec<String> {
+    read(PINNED)
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub fn save_pinned_tenants(ids: &[String]) {
+    write(PINNED, &json!(ids).to_string());
 }
 
 /// 選んだテナントだけ忘れる（iOS 以外の「会社を切り替え」で使う。iOS はその場で切り替える）。

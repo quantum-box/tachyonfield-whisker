@@ -10,6 +10,8 @@
 // - accessory … 右端の印。"chevron"（›、既定）/ "check"（✓）/ "expand"（⌄）/ "collapse"（⌃）/ "none"
 //   裏のメニューでは "check" の行を「今いる行」として灰色の帯で囲み、印は出さない
 // - destructive … true なら赤字で印なし（サインアウトなど）
+// - action … 行を右へなぞる・長押ししたときに出す操作 { "key", "title", "symbol", "color" }（任意）。
+//   押されたら、その key で "select" を知らせる
 // 行が押されたら "select" を { key } 付きで Rust に知らせる。
 //
 // 中身の描き方（`MenuTableModel`）は、下から出るシート（`SheetView.swift`）でも使う。
@@ -49,6 +51,15 @@ struct MenuRow {
     let color: UIColor
     let accessory: String
     let destructive: Bool
+    let action: MenuAction?
+}
+
+/// 行を右へなぞる・長押ししたときに出す操作（会社のピン留めなど）。
+struct MenuAction {
+    let key: String
+    let title: String
+    let symbol: String
+    let color: UIColor
 }
 
 struct MenuSection {
@@ -201,6 +212,40 @@ final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate
         onSelect?(sections[indexPath.section].rows[indexPath.row].key)
     }
 
+    /// 右へなぞったときの操作。
+    func tableView(
+        _ tableView: UITableView,
+        leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath
+    ) -> UISwipeActionsConfiguration? {
+        guard let action = sections[indexPath.section].rows[indexPath.row].action else { return nil }
+        let item = UIContextualAction(style: .normal, title: action.title) { [weak self] _, _, done in
+            self?.onSelect?(action.key)
+            done(true)
+        }
+        item.backgroundColor = action.color
+        item.image = action.symbol.isEmpty ? nil : UIImage(systemName: action.symbol)
+        let config = UISwipeActionsConfiguration(actions: [item])
+        config.performsFirstActionWithFullSwipe = true
+        return config
+    }
+
+    /// 長押ししたときの操作（なぞる操作に気づかない人向けに同じものを出す）。
+    func tableView(
+        _ tableView: UITableView,
+        contextMenuConfigurationForRowAt indexPath: IndexPath,
+        point: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard let action = sections[indexPath.section].rows[indexPath.row].action else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            UIMenu(children: [
+                UIAction(
+                    title: action.title,
+                    image: action.symbol.isEmpty ? nil : UIImage(systemName: action.symbol)
+                ) { _ in self?.onSelect?(action.key) },
+            ])
+        }
+    }
+
     /// 設定アプリのアイコン：色付きの角丸の四角に、白い SF Symbol。
     private static func icon(symbol: String, color: UIColor) -> UIImage {
         let size = CGSize(width: 29, height: 29)
@@ -232,7 +277,15 @@ final class MenuTableModel: NSObject, UITableViewDataSource, UITableViewDelegate
                     symbol: row["symbol"] as? String ?? "",
                     color: color(hex: row["color"] as? String ?? ""),
                     accessory: row["accessory"] as? String ?? "chevron",
-                    destructive: row["destructive"] as? Bool ?? false
+                    destructive: row["destructive"] as? Bool ?? false,
+                    action: (row["action"] as? [String: Any]).map { action in
+                        MenuAction(
+                            key: action["key"] as? String ?? "",
+                            title: action["title"] as? String ?? "",
+                            symbol: action["symbol"] as? String ?? "",
+                            color: color(hex: action["color"] as? String ?? "")
+                        )
+                    }
                 )
             }
             return MenuSection(title: section["title"] as? String ?? "", rows: rows)
