@@ -370,12 +370,7 @@ pub fn send_json(
         .set("Accept", "application/json")
         .set("Content-Type", "application/json")
         .send_json(body.clone())
-        .map_err(|error| match error {
-            ureq::Error::Status(409, _) => {
-                "ほかの端末で設定が保存されました。読み直してから入れ直してください。".into()
-            }
-            other => describe_error(other),
-        })?
+        .map_err(describe_error)?
         .into_json()
         .map_err(|e| format!("応答を読めません: {e}"))
 }
@@ -395,11 +390,127 @@ pub fn save_cash_book_settings(
         &json!({ "data": data, "expectedVersion": expected_version }),
         Duration::from_secs(15),
     )
+    .map_err(|message| {
+        if message.contains("（409）") {
+            "ほかの端末で設定が保存されました。読み直してから入れ直してください。".into()
+        } else {
+            message
+        }
+    })
 }
 
 /// 店舗マスタ（帳簿を足すときに選ぶ）。
 pub fn inventory_stores(token: &str, tenant: &Tenant) -> Result<Vec<Value>, String> {
     fetch_list(token, tenant, "/v1/field/inventory/stores", "items")
+}
+
+/// レシートを種類ごとに読む（アップロードした日の範囲。1 回 200 件まで）。`(一覧, 打ち切られたか)`。
+pub fn list_receipts(
+    token: &str,
+    tenant: &Tenant,
+    receipt_type: &str,
+    from: &str,
+    to: &str,
+) -> Result<(Vec<Value>, bool), String> {
+    let path = format!(
+        "/v1/field/receipts?receipt_type={receipt_type}&date_from={}&date_to={}",
+        encode_query(&format!("{from}T00:00:00+09:00")),
+        encode_query(&format!("{to}T23:59:59+09:00")),
+    );
+    let mut body = fetch_record(token, tenant, &path)?;
+    match body["items"].take() {
+        Value::Array(items) => {
+            let truncated = items.len() >= 200;
+            Ok((items, truncated))
+        }
+        _ => Err("応答の形が想定と違います".into()),
+    }
+}
+
+/// 1 枚のレシート（読み取りが終わったか見るため）。
+pub fn get_receipt(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
+    fetch_record(token, tenant, &format!("/v1/field/receipts/{}", encode_query(id)))
+}
+
+/// どこかの出納帳（またはレジ管理表）にもう入っているレシート。
+pub fn receipt_uses(
+    token: &str,
+    tenant: &Tenant,
+    ids: &[String],
+    register_count: bool,
+) -> Result<Vec<String>, String> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut body = json!({ "receiptIds": ids });
+    if register_count {
+        body["registerCount"] = json!(true);
+    }
+    let value = send_json(
+        token,
+        tenant,
+        "POST",
+        "/v1/field/cash-book/receipt-uses",
+        &body,
+        Duration::from_secs(15),
+    )?;
+    Ok(value["receiptIds"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect())
+}
+
+/// レシートの写真・PDF を上げる（読み取りはサーバーで始まる）。同じファイルなら前のものが返る。
+pub fn upload_receipt(
+    token: &str,
+    tenant: &Tenant,
+    name: &str,
+    content_type: &str,
+    bytes: &[u8],
+    receipt_type: &str,
+) -> Result<Value, String> {
+    let boundary = format!("----whisker{:x}", bytes.len() ^ 0x5eed_cafe);
+    let safe_name: String = name.chars().filter(|c| *c != '"' && *c != '\r' && *c != '\n').collect();
+    let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 512);
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"receipt_type\"\r\n\r\n{receipt_type}\r\n\
+             --{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{safe_name}\"\r\n\
+             Content-Type: {content_type}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    field_request("POST", "/v1/field/receipts/upload", token, &tenant.id, &tenant.platform_id)
+        .timeout(Duration::from_secs(60))
+        .set("Content-Type", &format!("multipart/form-data; boundary={boundary}"))
+        .send_bytes(&body)
+        .map_err(|error| match error {
+            ureq::Error::Status(413, _) => "ファイルが大きすぎます。写真を小さくしてください".into(),
+            other => describe_error(other),
+        })?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
+/// レシートの読み取りを直す（金額・支払先・日付など）。直したレシートが返る。
+pub fn correct_receipt(token: &str, tenant: &Tenant, id: &str, reading: &Value) -> Result<Value, String> {
+    send_json(
+        token,
+        tenant,
+        "PATCH",
+        &format!("/v1/field/receipts/{}/reading", encode_query(id)),
+        reading,
+        Duration::from_secs(30),
+    )
+}
+
+/// 商品 1 つ（締めレシートを売上項目に振り分けるのに使う）。
+pub fn get_product(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
+    fetch_record(token, tenant, &format!("/v1/order/products/{}", encode_query(id)))
 }
 
 /// 店舗マスタに店舗を 1 つ登録する（帳簿を足すには店舗が要る）。

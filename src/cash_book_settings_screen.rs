@@ -8,6 +8,7 @@ use base64::Engine;
 use serde_json::{Value, json};
 
 use super::*;
+use whisker::Owner;
 use crate::cash_book_screen::*;
 use crate::cash_book_settings as rules;
 
@@ -28,6 +29,7 @@ struct Editor {
     message: RwSignal<String>,
     /// 保存していない変更を捨てる前に、一度だけ知らせる。
     warned: RwSignal<bool>,
+    owner: Option<Owner>,
 }
 
 impl Editor {
@@ -44,7 +46,7 @@ impl Editor {
         let Some(tenant) = self.tenant.get_untracked() else {
             return;
         };
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             let result = authed(self.token, move |access| {
                 let settings = api::cash_book_settings(access, &tenant)?
                     .unwrap_or_else(|| json!({ "data": { "books": [] }, "version": 0 }));
@@ -135,7 +137,7 @@ impl Editor {
         let version = settings["version"].as_i64().unwrap_or(0);
         self.saving.set(true);
         self.message.set("保存中…".into());
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             let result = authed(self.token, move |access| {
                 api::save_cash_book_settings(access, &tenant, &data, version)
             })
@@ -171,6 +173,7 @@ pub fn cash_book_settings_screen(
         saving: signal(false),
         message: signal(String::new()),
         warned: signal(false),
+        owner: Owner::current(),
     };
     editor.load();
     let editing = computed(move || editor.index.get().is_some());
@@ -247,7 +250,7 @@ fn book_list(editor: Editor) -> Element {
                             }
                             let Some(tenant) = editor.tenant.get_untracked() else { return };
                             creating.set(true);
-                            spawn_local(async move {
+                            spawn_in(editor.owner, async move {
                                 let result = authed(editor.token, move |access| api::create_store(access, &tenant, &name)).await;
                                 creating.set(false);
                                 match result {

@@ -36,6 +36,7 @@ serde_json = "1.0.154"
 futures-channel = "0.3"
 futures-util = "0.3"
 ureq = { version = "2", features = ["json"] }
+unicode-normalization = "0.1"
 whisker = "0.18"
 whisker-cng = { version = "0.18.0", default-features = false }
 whisker-input = "0.14.6"

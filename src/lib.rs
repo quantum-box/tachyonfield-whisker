@@ -11,6 +11,8 @@ mod api;
 mod attachments;
 mod cache;
 mod cash_book;
+mod cash_book_receipts;
+mod cash_book_receipts_ui;
 mod cash_book_screen;
 mod cash_book_settings;
 mod cash_book_settings_screen;

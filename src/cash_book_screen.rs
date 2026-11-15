@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use super::*;
+use whisker::Owner;
 use crate::api::SaveError;
 use crate::cash_book::{self as model, Book, Day, Expense, SavedDay, Template};
 
@@ -58,6 +59,15 @@ pub(crate) fn keyboard_done(focused: RwSignal<Option<InputRef>>) -> Element {
     }
 }
 
+/// 仕事（保存・読み込み）を、押したボタンではなく画面ごとの持ち主で動かす。
+/// ボタンが消えても（確定でボタンが入れ替わるなど）、送った保存が途中で止まらないように。
+pub(crate) fn spawn_in(owner: Option<Owner>, future: impl std::future::Future<Output = ()> + 'static) {
+    match owner {
+        Some(owner) => owner.with(|| spawn_local(future)),
+        None => spawn_local(future),
+    }
+}
+
 /// 前日残高の引き継ぎと証番に見る日数（Web 版の HISTORY_DAYS）。
 const HISTORY_DAYS: i64 = 62;
 /// 入力が止まってから保存するまで。
@@ -90,35 +100,39 @@ enum Books {
 
 /// 1 日分の帳簿の状態。どれも Copy なので、閉じた関数にそのまま渡せる。
 #[derive(Clone, Copy)]
-struct Ledger {
-    token: RwSignal<Option<String>>,
-    tenant: RwSignal<Option<Tenant>>,
+pub(crate) struct Ledger {
+    pub(crate) token: RwSignal<Option<String>>,
+    pub(crate) tenant: RwSignal<Option<Tenant>>,
     /// 選んでいる帳簿。`None` は従来の帳簿。
-    book: RwSignal<Option<Book>>,
+    pub(crate) book: RwSignal<Option<Book>>,
     /// 従来の帳簿の日も合わせて読むか（設定の先頭の帳簿のとき）。
     include_legacy: RwSignal<bool>,
-    date: RwSignal<String>,
-    day: RwSignal<Option<Day>>,
-    version: RwSignal<Option<i64>>,
+    pub(crate) date: RwSignal<String>,
+    pub(crate) day: RwSignal<Option<Day>>,
+    pub(crate) version: RwSignal<Option<i64>>,
     /// 今の日が従来の帳簿に置いてあるか。保存も同じ所へする。
     legacy_origin: RwSignal<bool>,
-    carried: RwSignal<Option<i64>>,
+    pub(crate) carried: RwSignal<Option<i64>>,
     voucher_start: RwSignal<usize>,
     load_error: RwSignal<String>,
     state: RwSignal<SaveState>,
     save_error: RwSignal<String>,
     /// 読み込みのたびに増やす。古い読み込み・保存の結果を捨てるのに使う。
-    generation: RwSignal<u64>,
+    pub(crate) generation: RwSignal<u64>,
     /// 入力欄を作り直すたびに増やす（読み込み・ほかの端末の保存を取り込んだとき）。
-    view: RwSignal<u64>,
+    pub(crate) view: RwSignal<u64>,
     /// 入力のたびに増やす。止まってから保存するのに使う。
     edits: RwSignal<u64>,
-    dirty: RwSignal<bool>,
+    pub(crate) dirty: RwSignal<bool>,
     saving: RwSignal<bool>,
+    /// 前の 62 日に保存してある日（支払先ごとの科目と、レシートの使い済みを見るため）。
+    pub(crate) nearby: RwSignal<Vec<Day>>,
+    /// 画面の持ち主（仕事はここで動かす）。
+    pub(crate) owner: Option<Owner>,
 }
 
 impl Ledger {
-    fn book_id(&self) -> Option<String> {
+    pub(crate) fn book_id(&self) -> Option<String> {
         self.book.with_untracked(|b| b.as_ref().map(|b| b.id.clone()))
     }
 
@@ -127,7 +141,7 @@ impl Ledger {
     }
 
     /// この日に使う項目。
-    fn template(&self) -> Template {
+    pub(crate) fn template(&self) -> Template {
         let fallback = self.book.with(|b| b.as_ref().map(|b| b.template.clone()));
         self.day.with(|d| match d {
             Some(day) => day.template_or(fallback.as_ref()),
@@ -135,7 +149,7 @@ impl Ledger {
         })
     }
 
-    fn confirmed(&self) -> bool {
+    pub(crate) fn confirmed(&self) -> bool {
         self.day.with(|d| d.as_ref().is_some_and(Day::is_confirmed))
     }
 
@@ -155,7 +169,7 @@ impl Ledger {
         let date = self.date.get_untracked();
         let book_id = self.book_id();
         let legacy = self.include_legacy.get_untracked() || book_id.is_none();
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             // 送ったばかりの保存が終わるまで待つ（戻ってきた日を古い中身で開かない）。
             for _ in 0..50 {
                 if !self.saving.get_untracked() {
@@ -181,6 +195,7 @@ impl Ledger {
 
     fn loaded(self, date: &str, saved: Vec<SavedDay>) {
         let current = saved.iter().find(|item| item.day.date == date).cloned();
+        self.nearby.set(saved.iter().map(|item| item.day.clone()).collect());
         let stored: Vec<&SavedDay> = saved.iter().filter(|item| item.day.date.as_str() < date).collect();
         let earlier =
             model::with_carried_balances(&stored.iter().map(|item| item.day.clone()).collect::<Vec<_>>());
@@ -212,7 +227,7 @@ impl Ledger {
     }
 
     /// 入力を反映し、止まってから保存する。確定した日は `allow_confirmed` のときだけ変える。
-    fn update(self, allow_confirmed: bool, change: impl FnOnce(&mut Day)) {
+    pub(crate) fn update(self, allow_confirmed: bool, change: impl FnOnce(&mut Day)) {
         let Some(mut day) = self.day.get_untracked() else {
             return;
         };
@@ -229,7 +244,7 @@ impl Ledger {
         }
         self.edits.update(|e| *e += 1);
         let edits = self.edits.get_untracked();
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             sleep(SAVE_DELAY).await;
             if self.edits.get_untracked() == edits {
                 self.flush();
@@ -238,13 +253,13 @@ impl Ledger {
     }
 
     /// 入力をすぐ保存する（確定のときなど）。
-    fn update_now(self, allow_confirmed: bool, change: impl FnOnce(&mut Day)) {
+    pub(crate) fn update_now(self, allow_confirmed: bool, change: impl FnOnce(&mut Day)) {
         self.update(allow_confirmed, change);
         self.flush();
     }
 
     /// まだ送っていない入力を保存する。
-    fn flush(self) {
+    pub(crate) fn flush(self) {
         if self.saving.get_untracked()
             || !self.dirty.get_untracked()
             || self.state.get_untracked() == SaveState::Conflict
@@ -260,7 +275,7 @@ impl Ledger {
         let generation = self.generation.get_untracked();
         let expected = self.version.get_untracked();
         let book_id = if self.legacy_origin.get_untracked() { None } else { self.book_id() };
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             let result = save(self.token, tenant, day.clone(), expected, book_id).await;
             self.saving.set(false);
             if self.generation.get_untracked() != generation {
@@ -306,7 +321,7 @@ impl Ledger {
         };
         let book_id = if legacy { None } else { self.book_id() };
         let token = self.token;
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             let _ = save(token, tenant, day, Some(version), book_id).await;
         });
     }
@@ -329,7 +344,7 @@ impl Ledger {
         let date = self.date.get_untracked();
         let book_id = if self.legacy_origin.get_untracked() { None } else { self.book_id() };
         let legacy = self.legacy_origin.get_untracked();
-        spawn_local(async move {
+        spawn_in(self.owner, async move {
             let day_for = date.clone();
             let result = authed(self.token, move |access| {
                 api::cash_book_days(access, &tenant, &day_for, &day_for, book_id.as_deref())
@@ -448,6 +463,8 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
         edits: signal(0),
         dirty: signal(false),
         saving: signal(false),
+        nearby: signal(Vec::new()),
+        owner: Owner::current(),
     };
     let choosing_book = signal(false);
     let settings_open = signal(false);
@@ -756,9 +773,11 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
     let confirmed = computed(move || ledger.confirmed());
     let previous_manual =
         computed(move || ledger.day.with(|d| d.as_ref().is_some_and(|d| d.previous_balance_manual)));
+    let receipts = crate::cash_book_receipts_ui::start(ledger);
 
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
+            crate::cash_book_receipts_ui::ReceiptMessage(receipts: receipts)
             Show(when: move || !status.get().is_empty()) {
                 Text(
                     value: status,
@@ -858,7 +877,10 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
                 )
             }
 
+            crate::cash_book_receipts_ui::SalesPanel(receipts: receipts)
+
             SectionHeader(title: computed(|| "支出".to_owned()))
+            crate::cash_book_receipts_ui::PurchasePanel(receipts: receipts)
             ForEach(
                 each: move || {
                     let (view, locked) = (ledger.view.get(), confirmed.get());
@@ -949,6 +971,7 @@ fn expense_card(ledger: Ledger, id: String, locked: bool) -> Element {
         ledger.update(false, move |d| d.expenses.retain(|e| e.id != id));
     };
     let from_receipt = row.receipt_id.is_some();
+    let receipt_for_fix = row.receipt_id.clone().unwrap_or_default();
     let purchased_on = row.purchased_on.clone();
     let note = computed(move || {
         purchased_on
@@ -988,7 +1011,7 @@ fn expense_card(ledger: Ledger, id: String, locked: bool) -> Element {
             TextRow(
                 label: "支払先",
                 text: payee,
-                editable: !locked,
+                editable: !locked && !from_receipt,
                 on_text: move |text: String| set(Box::new(move |row| row.payee = text)),
             )
             TextRow(
@@ -1000,9 +1023,16 @@ fn expense_card(ledger: Ledger, id: String, locked: bool) -> Element {
             AmountRow(
                 label: computed(|| "金額".to_owned()),
                 initial: model::format_optional_yen(row.amount),
-                editable: !locked,
+                editable: !locked && !from_receipt,
                 on_amount: move |amount: Option<i64>| set(Box::new(move |row| row.amount = amount)),
             )
+            Show(when: move || from_receipt && !locked) {
+                crate::cash_book_receipts_ui::ReceiptFix(
+                    ledger: ledger,
+                    row_id: id.get_untracked(),
+                    receipt_id: receipt_for_fix.clone(),
+                )
+            }
             Show(when: move || !locked) {
                 View(
                     style: css!(
