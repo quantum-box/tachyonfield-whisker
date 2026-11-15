@@ -479,11 +479,22 @@ fn tenant_picker(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant
     let error = signal(String::new());
     let last_id = computed(move || tenants.with(|v| v.last().map(|t| t.id.clone())));
 
+    // 前に読んだ会社の一覧があれば、すぐ出す（裏で取り直す）。
+    if let Some(list) = cache::tenants().filter(|list| !list.is_empty()) {
+        tenants.set(list);
+        loading.set(false);
+    }
     spawn_local(async move {
         let result = authed(token, |access| api::list_tenants(access)).await;
         loading.set(false);
         match result {
-            Ok(list) => tenants.set(list),
+            Ok(list) => {
+                cache::put_tenants(&list);
+                error.set(String::new());
+                tenants.set(list);
+            }
+            // 覚えていた一覧を出せているなら、取り直しの失敗は見せない。
+            Err(_) if tenants.with_untracked(|v| !v.is_empty()) => {}
             Err(message) => error.set(message),
         }
     });
@@ -974,10 +985,20 @@ fn drawer_items(
 
     let load_tenants = move || {
         tenants_error.set(String::new());
+        // 前に読んだ会社の一覧があれば、すぐ出す（裏で取り直す）。
+        if tenants.with_untracked(Vec::is_empty) {
+            if let Some(list) = cache::tenants().filter(|list| !list.is_empty()) {
+                tenants.set(list);
+            }
+        }
         spawn_local(async move {
             match authed(token, api::list_tenants).await {
                 Ok(list) if list.is_empty() => tenants_error.set("使える会社がありません".into()),
-                Ok(list) => tenants.set(list),
+                Ok(list) => {
+                    cache::put_tenants(&list);
+                    tenants.set(list);
+                }
+                Err(_) if tenants.with_untracked(|v| !v.is_empty()) => {}
                 Err(message) => tenants_error.set(message),
             }
         });
