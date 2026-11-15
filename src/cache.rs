@@ -2,7 +2,7 @@
 //!
 //! 画面を開いたら、まず覚えておいた中身をすぐ出し、裏で取り直して届いたら差し替える。
 //! アプリを閉じても残るよう、端末のキャッシュ用フォルダ（iOS が容量に応じて消してよい場所）にも書く。
-//! 会社（テナント）ごとに分けて覚え、サインアウトしたら全部消す。
+//! 一覧と詳細は会社（テナント）ごとに分けて覚える。選べる会社の一覧も覚える。サインアウトしたら全部消す。
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -24,7 +24,28 @@ fn key(tenant: &Tenant, path: &str) -> String {
 
 /// 覚えておいた中身。無ければ None。
 pub fn get(tenant: &Tenant, path: &str) -> Option<Value> {
-    let key = key(tenant, path);
+    read(key(tenant, path))
+}
+
+/// 読んだ中身を覚える。
+pub fn put(tenant: &Tenant, path: &str, value: &Value) {
+    write(key(tenant, path), value);
+}
+
+const TENANTS: &str = "tenants";
+
+/// 前に読んだ、選べる会社の一覧。
+pub fn tenants() -> Option<Vec<Tenant>> {
+    serde_json::from_value(read(TENANTS.into())?).ok()
+}
+
+pub fn put_tenants(tenants: &[Tenant]) {
+    if let Ok(value) = serde_json::to_value(tenants) {
+        write(TENANTS.into(), &value);
+    }
+}
+
+fn read(key: String) -> Option<Value> {
     if let Some(value) = memory().lock().ok()?.get(&key) {
         return Some(value.clone());
     }
@@ -33,9 +54,7 @@ pub fn get(tenant: &Tenant, path: &str) -> Option<Value> {
     Some(value)
 }
 
-/// 読んだ中身を覚える。
-pub fn put(tenant: &Tenant, path: &str, value: &Value) {
-    let key = key(tenant, path);
+fn write(key: String, value: &Value) {
     if let Some(file) = file(&key) {
         if let Some(dir) = file.parent() {
             let _ = std::fs::create_dir_all(dir);

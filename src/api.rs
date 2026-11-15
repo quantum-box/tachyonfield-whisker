@@ -28,7 +28,7 @@ const ENVIRONMENTS: [(&str, &str, &str); 2] = [
     ),
 ];
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Tenant {
     pub id: String,
     pub name: String,
