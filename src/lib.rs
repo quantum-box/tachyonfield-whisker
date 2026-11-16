@@ -77,6 +77,14 @@ fn is_dark() -> bool {
         .unwrap_or(false)
 }
 
+/// 設定の「視差効果を減らす」（動きを減らす）。入っていたら、回す・揺らす動きを止める。
+#[derive(Clone, Copy)]
+struct ReduceMotion(RwSignal<bool>);
+
+fn reduce_motion() -> bool {
+    use_context::<ReduceMotion>().is_some_and(|reduce| reduce.0.get())
+}
+
 thread_local! {
     /// iPad の広い表示か（全画面か広めの分割）。横のメニューを出しっぱなしにし、下のタブは出さない。
     /// 画面は作り直さず（ログインや Agent との会話を残すため）、これを読む所だけが切り替わる。
@@ -190,6 +198,8 @@ fn app() -> Element {
     let width = signal(0.0_f32);
     provide_context(WindowWidth(width));
     provide_context(Appearance(dark));
+    let reduce = signal(false);
+    provide_context(ReduceMotion(reduce));
     render! {
         View(
             style: css!(flex_grow: 1.0, display: Display::Flex, flex_direction: FlexDirection::Column)
@@ -212,6 +222,10 @@ fn app() -> Element {
                 if wide.get_untracked() != Some(value) {
                     wide_now.set(value);
                     wide.set(Some(value));
+                }
+            }, on_motion: move |value: bool| {
+                if reduce.get_untracked() != value {
+                    reduce.set(value);
                 }
             })
             // 幅と外観の初回取得を待ち、以後は画面の状態を保つ。

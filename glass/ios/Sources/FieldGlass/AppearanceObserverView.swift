@@ -3,6 +3,7 @@
 // Rust 側で描く部分（帯・詳細画面など）の色を、iPhone の設定に合わせるために使う。
 // あわせて、画面（ウィンドウ）の幅と、iPad の広い表示（横の大きさが regular）かを
 // "layout" { wide, width } で知らせる。iPad では横のメニューを出しっぱなしにし、広ければ 2 列に並べる。
+// 設定の「視差効果を減らす」（動きを減らす）が入っているかも "motion" { reduce } で知らせる。
 
 #if canImport(UIKit)
 import UIKit
@@ -12,12 +13,14 @@ import WhiskerModule
 public final class FieldAppearanceObserverView: WhiskerUI<UIView> {
     private var last: Bool?
     private var lastLayout: (Bool, Int)?
+    private var lastMotion: Bool?
 
     @objc public override func createView() -> UIView {
         let view = TraitWatcher()
         view.isUserInteractionEnabled = false
         view.onChange = { [weak self] dark, force in self?.report(dark, force: force) }
         view.onLayout = { [weak self] wide, width, force in self?.reportLayout(wide, width, force: force) }
+        view.onMotion = { [weak self] reduce, force in self?.reportMotion(reduce, force: force) }
         return view
     }
 
@@ -27,6 +30,12 @@ public final class FieldAppearanceObserverView: WhiskerUI<UIView> {
         lastLayout = (wide, rounded)
         WhiskerCustomEvent.dispatch(
             from: self, name: "layout", params: ["wide": wide ? 1.0 : 0.0, "width": Double(rounded)])
+    }
+
+    private func reportMotion(_ reduce: Bool, force: Bool) {
+        guard force || reduce != lastMotion else { return }
+        lastMotion = reduce
+        WhiskerCustomEvent.dispatch(from: self, name: "motion", params: ["reduce": reduce ? 1.0 : 0.0])
     }
 
     private func report(_ dark: Bool, force: Bool) {
@@ -39,8 +48,10 @@ public final class FieldAppearanceObserverView: WhiskerUI<UIView> {
 private final class TraitWatcher: UIView {
     var onChange: ((Bool, Bool) -> Void)?
     var onLayout: ((Bool, CGFloat, Bool) -> Void)?
+    var onMotion: ((Bool, Bool) -> Void)?
     private var activeObserver: NSObjectProtocol?
     private var rotateObserver: NSObjectProtocol?
+    private var motionObserver: NSObjectProtocol?
     /// ウィンドウの大きさの変化（Stage Manager や分割表示で幅を変えたとき）。
     private var geometryObservation: NSKeyValueObservation?
 
@@ -63,6 +74,11 @@ private final class TraitWatcher: UIView {
         ) { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { self?.notify() }
         }
+        motionObserver = NotificationCenter.default.addObserver(
+            forName: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.notify()
+        }
         if #available(iOS 17.0, *) {
             registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitHorizontalSizeClass.self]) { (view: TraitWatcher, _) in
                 view.notify()
@@ -75,6 +91,7 @@ private final class TraitWatcher: UIView {
     deinit {
         if let activeObserver { NotificationCenter.default.removeObserver(activeObserver) }
         if let rotateObserver { NotificationCenter.default.removeObserver(rotateObserver) }
+        if let motionObserver { NotificationCenter.default.removeObserver(motionObserver) }
     }
 
     override func layoutSubviews() {
@@ -105,6 +122,7 @@ private final class TraitWatcher: UIView {
         guard UIApplication.shared.applicationState == .active, let window else { return }
         let regular = window.traitCollection.horizontalSizeClass == .regular
         onLayout?(regular && window.bounds.width >= 700, window.bounds.width, force)
+        onMotion?(UIAccessibility.isReduceMotionEnabled, force)
         // 自分の見た目ではなく、画面（ウィンドウ）の設定を見る。
         let style = window.traitCollection.userInterfaceStyle
         guard style != .unspecified else { return }

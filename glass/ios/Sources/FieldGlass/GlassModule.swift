@@ -99,7 +99,7 @@ public final class GlassModule: Module {
                 }
             }
             View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
-                Events("change", "layout")
+                Events("change", "layout", "motion")
             }
             View("field-glass:NavBar", FieldNavBarView.self) {
                 Prop("title") { (view: FieldNavBarView, value: WhiskerValue) in
