@@ -5,6 +5,7 @@
 // - title    … 真ん中の題名（空なら出さない）
 // - back     … 戻る先の名前。空でなければ左に iOS の「‹ 名前」の戻るボタンを出す
 // - menu     … "true" なら左に「☰」（裏のメニューを開く）。戻るボタンがあるときは出さない
+// - menu-icon … 左のボタンの SF Symbols（空なら「☰」）。iPad では横のメニューを出し入れする印にする
 // - action   … 右のボタンの文字（空なら出さない）
 // Rust へ知らせるもの：
 // - "press" { which } … "back"（戻る）/ "menu"（☰）/ "action"（右のボタン）が押された
@@ -55,6 +56,7 @@ public final class FieldNavBarView: WhiskerUI<UIView> {
     private var title = ""
     private var back = ""
     private var menu = false
+    private var menuIcon = ""
     private var action = ""
 
     private lazy var host: NavBarHost = {
@@ -71,6 +73,7 @@ public final class FieldNavBarView: WhiskerUI<UIView> {
     func setTitle(_ text: String) { title = text; apply() }
     func setBack(_ text: String) { back = text; apply() }
     func setMenu(_ on: Bool) { menu = on; apply() }
+    func setMenuIcon(_ name: String) { menuIcon = name; apply() }
     func setAction(_ text: String) { action = text; apply() }
 
     private func press(_ which: String) {
@@ -84,7 +87,7 @@ public final class FieldNavBarView: WhiskerUI<UIView> {
             host.previous.title = nil
             item.leftBarButtonItem = menu
                 ? UIBarButtonItem(
-                    image: UIImage(systemName: "line.3.horizontal"),
+                    image: UIImage(systemName: menuIcon.isEmpty ? "line.3.horizontal" : menuIcon),
                     primaryAction: UIAction { [weak self] _ in self?.press("menu") })
                 : nil
             host.bar.setItems([item], animated: false)

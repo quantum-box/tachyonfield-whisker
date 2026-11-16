@@ -76,6 +76,25 @@ thread_local! {
     /// iPad の広い表示か（全画面か広めの分割）。横のメニューを出しっぱなしにし、下のタブは出さない。
     /// 画面は作り直さず（ログインや Agent との会話を残すため）、これを読む所だけが切り替わる。
     static WIDE: std::cell::Cell<Option<RwSignal<bool>>> = const { std::cell::Cell::new(None) };
+    /// iPad の広い表示で、横のメニューを閉じているか（上の帯の左のボタンで出し入れする）。
+    static SIDEBAR_HIDDEN: std::cell::Cell<Option<RwSignal<bool>>> = const { std::cell::Cell::new(None) };
+}
+
+/// 横のメニューを閉じているか。
+fn sidebar_hidden() -> bool {
+    SIDEBAR_HIDDEN.with(|h| h.get()).is_some_and(|h| h.get())
+}
+
+/// 横のメニューを出す・閉じる。
+fn toggle_sidebar() {
+    if let Some(h) = SIDEBAR_HIDDEN.with(|h| h.get()) {
+        h.update(|v| *v = !*v);
+    }
+}
+
+/// iPad で、横のメニューが出ているか。
+fn sidebar_shown() -> bool {
+    is_wide() && !sidebar_hidden()
 }
 
 /// 今、iPad の広い表示か。画面の部品の中で読むと、切り替わったときに描き直される。
@@ -92,7 +111,7 @@ pub(crate) fn pane_width() -> ReadSignal<f32> {
     let width = use_context::<WindowWidth>().map(|w| w.0);
     computed(move || {
         let w = width.map_or(0.0, |w| w.get());
-        if is_wide() { w - DRAWER_WIDTH } else { w }
+        if sidebar_shown() { w - DRAWER_WIDTH } else { w }
     })
 }
 
@@ -156,6 +175,8 @@ fn app() -> Element {
     let wide = signal(None::<bool>);
     let wide_now = signal(false);
     WIDE.with(|w| w.set(Some(wide_now)));
+    let hidden = signal(false);
+    SIDEBAR_HIDDEN.with(|h| h.set(Some(hidden)));
     let width = signal(0.0_f32);
     provide_context(WindowWidth(width));
     render! {
@@ -725,22 +746,29 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
             View(
                 style: computed(move || {
                     // iPad の広い表示：横のメニューの右に並べて置く（引いて動かさない）。
+                    // 横のメニューを閉じたら、表の画面を左端まで広げる。
                     if is_wide() {
                         let safe_top = insets.get().top as f32;
-                        return css!(
+                        let shown = !sidebar_hidden();
+                        let s = css!(
                             position: PositionKind::Absolute,
                             top: px(-safe_top),
                             padding_top: px(safe_top),
                             bottom: px(0),
-                            left: px(DRAWER_WIDTH),
+                            left: px(0),
                             right: px(0),
                             display: Display::Flex,
                             flex_direction: FlexDirection::Column,
                             background_color: hex(SYSTEM_BACKGROUND),
                             overflow: Overflow::Hidden,
                         )
-                        .border_left(hairline())
                         .z_index(5);
+                        let s = if shown { s.left(px(DRAWER_WIDTH)).border_left(hairline()) } else { s };
+                        return s.transition(
+                            Transition::new(TransitionPropertyKind::name("left"))
+                                .duration(ms(260))
+                                .timing(EasingFunction::EaseOut),
+                        );
                     }
                     let x = offset.get();
                     let progress = (x / DRAWER_WIDTH).clamp(0.0, 1.0);
@@ -2199,13 +2227,16 @@ fn nav_bar(
         SystemNavBar(
             title: title.to_owned(),
             back: back_label.to_owned(),
-            // iPad の広い表示では横のメニューが出しっぱなしなので「☰」は出さない。
-            menu: computed(move || drawer.is_some() && !is_wide()),
+            menu: computed(move || drawer.is_some()),
+            // iPad の広い表示では「☰」の代わりに、横のメニューを出し入れするボタン。
+            menu_icon: computed(move || if is_wide() { "sidebar.left".to_owned() } else { String::new() }),
             action: action_label.to_owned(),
             on_press: move |which: String| match which.as_str() {
                 "back" => on_back.call(),
                 "menu" => {
-                    if let Some(Drawer(open)) = drawer {
+                    if is_wide() {
+                        toggle_sidebar();
+                    } else if let Some(Drawer(open)) = drawer {
                         open.set(true);
                     }
                 }

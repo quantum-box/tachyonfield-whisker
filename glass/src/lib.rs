@@ -358,6 +358,7 @@ pub fn native_nav_bar(
     title: Signal<String>,
     back: Signal<String>,
     menu: Signal<bool>,
+    menu_icon: Signal<String>,
     action: Signal<String>,
     style: Style,
     on_press: NavPressEvent,
@@ -377,6 +378,7 @@ pub fn nav_bar(
     title: String,
     back: String,
     menu: Signal<bool>,
+    menu_icon: Signal<String>,
     action: String,
     on_press: Callback<String>,
     style: Style,
@@ -385,6 +387,7 @@ pub fn nav_bar(
         .title(title.clone())
         .back(back.clone())
         .menu(menu)
+        .menu_icon(menu_icon)
         .action(action.clone())
         .style(style.clone())
         .on_press(move |e: NavPressEvent| on_press.run(e.detail.which))
