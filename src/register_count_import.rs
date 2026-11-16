@@ -168,7 +168,7 @@ pub(crate) fn sales_import(sheet: Sheet) -> Element {
 
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
-            View(style: group_style().margin_top(px(16))) {
+            View(style: computed(move || group_style().margin_top(px(16)))) {
                 FieldRow(
                     label: computed(|| "売上伝票レポート（OCR）から入力".to_owned()),
                     value: computed(move || if open.get() { "閉じる".to_owned() } else { "開く".to_owned() }),
@@ -183,13 +183,13 @@ pub(crate) fn sales_import(sheet: Sheet) -> Element {
                         AttachButton(on_pick: move |f: field_glass::PickedFile| scan(f), style: css!(width: px(36), height: px(36)))
                         Text(
                             value: computed(move || if scanning.get() { "証憑OCRで伝票を読み取り中…".to_owned() } else { "写真・PDFを読み取る".to_owned() }),
-                            style: css!(color: hex(TINT), font_size: px(16)),
+                            style: computed(move || css!(color: hex(TINT), font_size: px(16))),
                         )
                     }
                     FieldRow(label: computed(|| "伝票一覧を更新".to_owned()), value: computed(String::new), on_tap: move |_| load())
                     Show(when: move || loading.get()) { Hint(text: "伝票を読み込み中…") }
                     Show(when: move || !error.with(String::is_empty)) {
-                        Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                        Text(value: computed(move || error.get()), style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
                     }
                     Show(when: move || truncated.get()) { Hint(text: "取得上限に達したため、一部の伝票が表示されていない可能性があります。") }
                     Show(when: move || !loading.get() && reports.with(Vec::is_empty) && error.with(String::is_empty)) {
@@ -218,7 +218,7 @@ pub(crate) fn sales_import(sheet: Sheet) -> Element {
                     Show(when: move || preview.with(Option::is_some)) {
                         Text(
                             value: computed(move || preview_text(&sheet, preview.get())),
-                            style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16))),
+                            style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16)))),
                         )
                         FieldRow(
                             label: computed(|| "選んだ伝票を反映".to_owned()),
@@ -234,7 +234,7 @@ pub(crate) fn sales_import(sheet: Sheet) -> Element {
                 }
             }
             Show(when: move || !message.with(String::is_empty)) {
-                Text(value: computed(move || message.get()), style: css!(color: hex(TINT), font_size: px(13), padding: (px(6), px(32))))
+                Text(value: computed(move || message.get()), style: computed(move || css!(color: hex(TINT), font_size: px(13), padding: (px(6), px(32)))))
             }
         }
     }
@@ -355,7 +355,7 @@ pub(crate) fn product_sales(sheet: Sheet) -> Element {
     });
     render! {
         Show(when: move || has_receipts.get()) {
-            View(style: group_style().margin_top(px(12))) {
+            View(style: computed(move || group_style().margin_top(px(12)))) {
                 FieldRow(
                     label: computed(|| "登録済み売上から集計".to_owned()),
                     value: computed(move || if open.get() { "閉じる".to_owned() } else { "開く".to_owned() }),
@@ -365,15 +365,15 @@ pub(crate) fn product_sales(sheet: Sheet) -> Element {
                     Hint(text: "このレジ管理表に取り込んだ伝票にひもづく確定済み売上を、商品設定に沿って集計します。")
                     Show(when: move || loading.get()) { Hint(text: "売上台帳を集計中…") }
                     Show(when: move || !error.with(String::is_empty)) {
-                        Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                        Text(value: computed(move || error.get()), style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
                         FieldRow(label: computed(|| "再取得".to_owned()), value: computed(String::new), on_tap: move |_| load())
                     }
                     Show(when: move || stale.get()) {
-                        Text(value: "伝票を入れ替えたので、集計し直してください。", style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                        Text(value: "伝票を入れ替えたので、集計し直してください。", style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
                         FieldRow(label: computed(|| "集計し直す".to_owned()), value: computed(String::new), on_tap: move |_| load())
                     }
                     Show(when: move || result.with(Option::is_some) && !stale.get()) {
-                        Text(value: summary, style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16))))
+                        Text(value: summary, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16)))))
                         Show(when: move || result.with(|r| r.as_ref().is_some_and(|r| r.3 > 0))) {
                             FieldRow(
                                 label: computed(|| "販売数・金額を反映".to_owned()),
@@ -394,7 +394,7 @@ pub(crate) fn product_sales(sheet: Sheet) -> Element {
                 }
             }
             Show(when: move || !message.with(String::is_empty)) {
-                Text(value: computed(move || message.get()), style: css!(color: hex(TINT), font_size: px(13), padding: (px(6), px(32))))
+                Text(value: computed(move || message.get()), style: computed(move || css!(color: hex(TINT), font_size: px(13), padding: (px(6), px(32)))))
             }
         }
     }

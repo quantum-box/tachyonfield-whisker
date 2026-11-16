@@ -559,10 +559,10 @@ pub fn agent_screen(
                                 gap: px(6),
                             ),
                         ) {
-                            Text(value: "✦", style: css!(color: hex(PURPLE), font_size: px(15)))
+                            Text(value: "✦", style: computed(move || css!(color: hex(PURPLE), font_size: px(15))))
                             Text(
                                 value: "考えています…",
-                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(15)),
+                                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15))),
                             )
                         }
                     }
@@ -659,13 +659,13 @@ fn composer(
                     return_key: ReturnKey::Send,
                     input_ref: input,
                     on_submit: move |_| on_send.run(()),
-                    style: css!(
+                    style: computed(move || css!(
                         flex_grow: 1.0,
                         height: px(40),
                         font_size: px(17),
                         color: hex(LABEL),
                         background_color: Color::rgba(0, 0, 0, 0.0),
-                    ),
+                    )),
                 )
                 View(
                     style: computed(move || {
@@ -743,19 +743,19 @@ fn agent_welcome(on_pick: Callback<String>) -> Element {
                 ),
             ) {
                 Glass(corner_radius: 36.0_f32, style: glass_fill())
-                Text(value: "✦", style: css!(color: hex(PURPLE), font_size: px(34)))
+                Text(value: "✦", style: computed(move || css!(color: hex(PURPLE), font_size: px(34))))
             }
             Text(
                 value: "何をしましょう？",
-                style: css!(color: hex(LABEL), font_size: px(28), font_weight: FontWeight::Bold),
+                style: computed(move || css!(color: hex(LABEL), font_size: px(28), font_weight: FontWeight::Bold)),
             )
             Text(
                 value: "Field のデータについて聞いたり、作業を頼んだりできます。",
-                style: css!(
+                style: computed(move || css!(
                     color: placeholder_color(),
                     font_size: px(16),
                     text_align: TextAlign::Center,
-                ),
+                )),
             )
             View(style: css!(height: px(20)))
             View(
@@ -782,7 +782,7 @@ fn agent_welcome(on_pick: Callback<String>) -> Element {
                                 Glass(corner_radius: 21.0_f32, style: glass_fill())
                                 Text(
                                     value: example,
-                                    style: css!(color: hex(LABEL), font_size: px(15)),
+                                    style: computed(move || css!(color: hex(LABEL), font_size: px(15))),
                                 )
                             }
                         }
@@ -817,14 +817,14 @@ fn user_bubble(text: Signal<String>) -> Element {
             ),
         ) {
             View(
-                style: css!(
+                style: computed(move || css!(
                     max_width: percent(80),
                     padding: (px(10), px(14)),
                     border_radius: px(20),
                     background_color: hex(TINT),
-                ),
+                )),
             ) {
-                Text(value: text, style: css!(color: Color::hex(0xFFFFFF), font_size: px(16)))
+                Text(value: text, style: computed(move || css!(color: Color::hex(0xFFFFFF), font_size: px(16))))
             }
         }
     }
@@ -836,7 +836,7 @@ fn attachment_chip(name: String, on_remove: Callback<()>) -> Element {
     let label = format!("📎 {name}");
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -845,21 +845,21 @@ fn attachment_chip(name: String, on_remove: Callback<()>) -> Element {
                 padding: (px(6), px(6), px(6), px(12)),
                 border_radius: px(16),
                 background_color: hex(FILL),
-            ),
+            )),
         ) {
             Text(
                 value: label.clone(),
                 max_lines: 1u32,
-                style: css!(
+                style: computed(move || css!(
                     color: hex(LABEL),
                     font_size: px(14),
                     flex_shrink: 1.0,
                     text_overflow: TextOverflow::Ellipsis,
-                ),
+                )),
             )
             View(
                 on_tap: move |_| on_remove.run(()),
-                style: css!(
+                style: computed(move || css!(
                     width: px(22),
                     height: px(22),
                     border_radius: px(11),
@@ -867,9 +867,9 @@ fn attachment_chip(name: String, on_remove: Callback<()>) -> Element {
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     background_color: hex(SECONDARY_LABEL),
-                ),
+                )),
             ) {
-                Text(value: "✕", style: css!(color: hex(FILL), font_size: px(11), font_weight: FontWeight::Bold))
+                Text(value: "✕", style: computed(move || css!(color: hex(FILL), font_size: px(11), font_weight: FontWeight::Bold)))
             }
         }
     }
@@ -929,12 +929,12 @@ fn tool_line(text: Signal<String>, state: Signal<Role>) -> Element {
             Text(value: mark, style: mark_color)
             Text(
                 value: text,
-                style: css!(
+                style: computed(move || css!(
                     flex_shrink: 1.0,
                     color: hex(SECONDARY_LABEL),
                     font_size: px(13),
                     text_overflow: TextOverflow::Ellipsis,
-                ),
+                )),
             )
         }
     }
@@ -944,7 +944,7 @@ fn tool_line(text: Signal<String>, state: Signal<Role>) -> Element {
 #[component]
 fn notice_line(text: Signal<String>) -> Element {
     render! {
-        Text(value: text, style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)))
+        Text(value: text, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13))))
     }
 }
 
@@ -965,16 +965,16 @@ fn summary_line(text: Signal<String>, open: Signal<bool>, on_tap: Callback<()>) 
         ) {
             Text(
                 value: "✓",
-                style: css!(
+                style: computed(move || css!(
                     color: hex(SECONDARY_LABEL),
                     font_size: px(13),
                     font_weight: FontWeight::Bold,
                     width: px(14),
-                ),
+                )),
             )
             Text(
                 value: label,
-                style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)),
+                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13))),
             )
         }
     }

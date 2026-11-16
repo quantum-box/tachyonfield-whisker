@@ -31,7 +31,7 @@ fn button_style() -> Css {
 #[component]
 pub(crate) fn day_print(html: Signal<String>, name: Signal<String>, landscape: Signal<bool>) -> Element {
     render! {
-        View(style: group_style().margin_top(px(12))) {
+        View(style: computed(move || group_style().margin_top(px(12)))) {
             field_glass::PrintButton(label: "この日を印刷・PDF".to_owned(), html: html, name: name, landscape: landscape, style: button_style())
         }
     }
@@ -137,7 +137,7 @@ pub(crate) fn period_print(
         });
     };
     render! {
-        View(style: group_style().margin_top(px(12))) {
+        View(style: computed(move || group_style().margin_top(px(12)))) {
             FieldRow(
                 label: computed(move || format!("{}の期間印刷", if kind == Kind::Cash { "現金出納帳" } else { "レジ管理表" })),
                 value: computed(move || if open.get() { "閉じる".to_owned() } else { "開く".to_owned() }),
@@ -158,7 +158,7 @@ pub(crate) fn period_print(
                     on_tap: move |_| if !loading.get_untracked() { prepare() },
                 )
                 Show(when: move || !message.with(String::is_empty)) {
-                    Text(value: computed(move || message.get()), style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(6), px(16))))
+                    Text(value: computed(move || message.get()), style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(6), px(16)))))
                 }
                 Show(when: move || !html.with(String::is_empty)) {
                     field_glass::PrintButton(label: "期間を印刷・PDF".to_owned(), html: computed(move || html.get()), name: computed(move || name.get()), landscape: computed(move || landscape.get()), style: button_style())

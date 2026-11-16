@@ -232,6 +232,7 @@ dependencies = [
  "ureq",
  "whisker",
  "whisker-cng",
+ "whisker-engine",
  "whisker-input",
  "whisker-safe-area",
 ]

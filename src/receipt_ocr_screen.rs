@@ -324,7 +324,7 @@ pub fn receipt_ocr_screen(
                         Show(when: move || split.get() && ocr.selected.with(Option::is_none)) {
                             Text(
                                 value: "左の一覧から証憑を選ぶと、ここに原本と読み取り結果が出ます。",
-                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), padding: (px(80), px(40)), text_align: TextAlign::Center),
+                                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), padding: (px(80), px(40)), text_align: TextAlign::Center)),
                             )
                         }
                         ForEach(
@@ -352,7 +352,7 @@ fn list_view(ocr: Ocr) -> Element {
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
             SectionHeader(title: computed(|| "証憑を追加".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 Choice(
                     label: computed(|| "種別".to_owned()),
                     options: computed(|| options(model::UPLOAD_TYPES)),
@@ -369,21 +369,21 @@ fn list_view(ocr: Ocr) -> Element {
                     AttachButton(on_pick: move |f: field_glass::PickedFile| ocr.upload(f), style: css!(width: px(36), height: px(36)))
                     Text(
                         value: computed(move || if ocr.uploading.get() { "送信中…".to_owned() } else { "証憑を追加・撮影".to_owned() }),
-                        style: css!(color: hex(TINT), font_size: px(17)),
+                        style: computed(move || css!(color: hex(TINT), font_size: px(17))),
                     )
                 }
             }
-            Text(value: upload_hint, style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32))))
+            Text(value: upload_hint, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))))
             Show(when: move || !ocr.message.with(String::is_empty)) {
                 Text(
                     value: computed(move || ocr.message.get()),
-                    style: css!(color: hex(TINT), font_size: px(14), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(TINT), font_size: px(14), padding: (px(8), px(32), px(0), px(32)))),
                     on_tap: move |_| ocr.message.set(String::new()),
                 )
             }
 
             SectionHeader(title: computed(|| "絞り込み".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 Choice(
                     label: computed(|| "状態".to_owned()),
                     options: computed(|| options(model::STATUS_FILTERS)),
@@ -407,7 +407,7 @@ fn list_view(ocr: Ocr) -> Element {
                 Hint(text: "証憑を読み込んでいます…")
             }
             Show(when: move || !ocr.error.with(String::is_empty)) {
-                Text(value: computed(move || ocr.error.get()), style: css!(color: hex(RED), font_size: px(14), padding: (px(12), px(32))))
+                Text(value: computed(move || ocr.error.get()), style: computed(move || css!(color: hex(RED), font_size: px(14), padding: (px(12), px(32)))))
                 Button(label: "再読み込み", on_tap: move |_| ocr.load())
             }
             Show(when: move || ocr.loaded.get() && ocr.error.with(String::is_empty) && ocr.list.with(Vec::is_empty)) {
@@ -415,7 +415,7 @@ fn list_view(ocr: Ocr) -> Element {
             }
             Show(when: move || !ocr.list.with(Vec::is_empty)) {
                 SectionHeader(title: computed(move || format!("証憑（{} 件）", ocr.list.with(Vec::len))))
-                View(style: group_style()) {
+                View(style: computed(move || group_style())) {
                     ForEach(
                         each: move || ocr.list.get(),
                         // 中身が変わったら行を作り直す（行は開いたときの値を持つため）。
@@ -603,7 +603,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
             Show(when: move || !split.get()) {
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     FieldRow(label: computed(|| "‹ 証憑の一覧へ".to_owned()), value: computed(String::new), on_tap: move |_| ocr.selected.set(None))
                 }
             }
@@ -617,7 +617,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
             }
 
             SectionHeader(title: computed(|| "OCR解析・台帳マッピング".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 Info(label: "証憑", value: get(|r| r.receipt.title()))
                 Info(label: "状態", value: get(|r| model::status_label(&r.receipt.status).to_owned()))
                 Info(label: "種別", value: get(|r| model::type_label(&r.receipt.receipt_type).to_owned()))
@@ -632,7 +632,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
             Show(when: move || status.get() == "error") {
                 Text(
                     value: get(|r| model::failure_message(r.receipt.error_message.as_deref())),
-                    style: css!(color: hex(RED), font_size: px(14), padding: (px(8), px(32))),
+                    style: computed(move || css!(color: hex(RED), font_size: px(14), padding: (px(8), px(32)))),
                 )
             }
 
@@ -648,15 +648,15 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
                         }
                         text
                     }),
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(12), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(12), px(32), px(0), px(32)))),
                 )
-                View(style: group_style().margin_top(px(8))) {
+                View(style: computed(move || group_style().margin_top(px(8)))) {
                     FieldRow(label: computed(|| "仕入として読み直す".to_owned()), value: computed(String::new), on_tap: move |_| reprocess(Some("purchase".into())))
                     FieldRow(label: computed(|| "売上として読み直す".to_owned()), value: computed(String::new), on_tap: move |_| reprocess(Some("sales".into())))
                 }
             }
             Show(when: move || kind.get() != "unsorted" && !booked.get() && status.get() != "pending" && status.get() != "processing") {
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     FieldRow(
                         label: computed(move || if kind.get() == "sales" { "仕入に変更".to_owned() } else { "売上に変更".to_owned() }),
                         value: computed(move || if form.get() == "type" { "閉じる".to_owned() } else { String::new() }),
@@ -677,9 +677,9 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
             Show(when: move || status.get() == "duplicate") {
                 Text(
                     value: "同じ内容のレシートがすでに取り込まれています。重複候補のため、経費・仕入台帳・材料単価への登録を止めています。",
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(12), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(12), px(32), px(0), px(32)))),
                 )
-                View(style: group_style().margin_top(px(8))) {
+                View(style: computed(move || group_style().margin_top(px(8)))) {
                     Show(when: move || r.with(|r| r.as_ref().is_some_and(|r| r.duplicate_of.is_some()))) {
                         FieldRow(
                             label: computed(|| "登録済みのレシートを確認".to_owned()),
@@ -710,7 +710,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
 
             // 操作。
             Show(when: move || status.get() == "error") {
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     FieldRow(
                         label: computed(move || if busy.get() { "再解析中…".to_owned() } else { "再解析".to_owned() }),
                         value: computed(String::new),
@@ -719,7 +719,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
                 }
             }
             Show(when: move || status.get() == "done") {
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     FieldRow(
                         label: computed(|| "読み取りを直す".to_owned()),
                         value: computed(move || if form.get() == "fix" { "閉じる".to_owned() } else { String::new() }),
@@ -731,7 +731,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
                 }
             }
             Show(when: move || status.get() == "done" && kind.get() != "unsorted") {
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     Show(when: move || kind.get() == "purchase") {
                         FieldRow(
                             label: computed(|| "仕入・経費をまとめて登録".to_owned()),
@@ -756,7 +756,7 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
                         on_tap: move |_| if ledger_reason.with_untracked(String::is_empty) { form.update(|f| *f = if f == "ledger" { String::new() } else { "ledger".into() }) },
                     )
                     Show(when: move || !ledger_reason.with(String::is_empty)) {
-                        Text(value: ledger_reason, style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                        Text(value: ledger_reason, style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
                     }
                     Show(when: is("ledger")) {
                         Text(
@@ -766,17 +766,17 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
                                 r.receipt.counterparty.clone().unwrap_or_else(|| "—".into()),
                                 r.summary(),
                             )).unwrap_or_default())),
-                            style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16))),
+                            style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16)))),
                         )
                         FieldRow(label: computed(|| "台帳へ反映する".to_owned()), value: computed(String::new), on_tap: move |_| to_ledger())
                     }
                 }
             }
             Show(when: move || !note.with(String::is_empty) && !note_error.get()) {
-                Text(value: computed(move || note.get()), style: css!(color: hex(TINT), font_size: px(14), padding: (px(12), px(32))))
+                Text(value: computed(move || note.get()), style: computed(move || css!(color: hex(TINT), font_size: px(14), padding: (px(12), px(32)))))
             }
             Show(when: move || !note.with(String::is_empty) && note_error.get()) {
-                Text(value: computed(move || note.get()), style: css!(color: hex(RED), font_size: px(14), padding: (px(12), px(32))))
+                Text(value: computed(move || note.get()), style: computed(move || css!(color: hex(RED), font_size: px(14), padding: (px(12), px(32)))))
             }
         }
     }
@@ -787,11 +787,11 @@ fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
 fn info(label: &'static str, value: Signal<String>) -> Element {
     render! {
         View(
-            style: css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, gap: px(12), padding: (px(10), px(16)), min_height: px(44))
-                .border_bottom(hairline()),
+            style: computed(move || css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, gap: px(12), padding: (px(10), px(16)), min_height: px(44))
+                .border_bottom(hairline())),
         ) {
-            Text(value: label, style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), width: px(72), flex_shrink: 0.0))
-            Text(value: value, max_lines: 3u32, style: css!(color: hex(LABEL), font_size: px(16), flex_shrink: 1.0))
+            Text(value: label, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), width: px(72), flex_shrink: 0.0)))
+            Text(value: value, max_lines: 3u32, style: computed(move || css!(color: hex(LABEL), font_size: px(16), flex_shrink: 1.0)))
         }
     }
 }
@@ -951,7 +951,7 @@ fn fix_form(ocr: Ocr, form: RwSignal<String>, say: Callback<(String, bool)>) -> 
                 } else {
                     "元のレシートを直します。このレシートを使っているところには、直した値が入ります。"
                 },
-                style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16))),
+                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16)))),
             )
             TextRow(label: "日付", text: date, editable: !booked, on_text: |_| {})
             TextRow(label: "合計", text: total, editable: !booked, on_text: |_| {})
@@ -972,7 +972,7 @@ fn fix_form(ocr: Ocr, form: RwSignal<String>, say: Callback<(String, bool)>) -> 
                 )
             }
             Show(when: move || !error.with(String::is_empty)) {
-                Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                Text(value: computed(move || error.get()), style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
             }
         }
     }
@@ -1161,7 +1161,7 @@ fn expense_form(
             }
             FieldRow(label: button_label, value: computed(String::new), on_tap: move |_| save())
             Show(when: move || !error.with(String::is_empty)) {
-                Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                Text(value: computed(move || error.get()), style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
             }
         }
     }

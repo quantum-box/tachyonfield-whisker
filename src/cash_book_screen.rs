@@ -53,7 +53,7 @@ pub(crate) fn keyboard_done(focused: RwSignal<Option<InputRef>>) -> Element {
                     }
                 },
             ) {
-                Text(value: "完了", style: css!(color: Color::hex(0xFFFFFF), font_size: px(16), font_weight: FontWeight::Numeric(600)))
+                Text(value: "完了", style: computed(move || css!(color: Color::hex(0xFFFFFF), font_size: px(16), font_weight: FontWeight::Numeric(600))))
             }
         }
         }
@@ -720,12 +720,12 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
                         Show(when: move || ledger.day.with(Option::is_some) && blocked.get().is_some()) {
                             Text(
                                 value: computed(move || blocked.get().unwrap_or_default()),
-                                style: css!(
+                                style: computed(move || css!(
                                     color: hex(SECONDARY_LABEL),
                                     font_size: px(15),
                                     padding: (px(32), px(24)),
                                     text_align: TextAlign::Center,
-                                ),
+                                )),
                             )
                         }
                         Show(when: move || ledger.day.with(Option::is_some) && blocked.get().is_none()) {
@@ -788,7 +788,7 @@ fn book_picker(books: RwSignal<Books>, ledger: Ledger, open: RwSignal<bool>) -> 
     render! {
         Show(when: move || options.with(|o| !o.is_empty())) {
             SectionHeader(title: computed(|| "店舗・レジ".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 FieldRow(
                     label: computed(move || label.get()),
                     value: computed(move || if open.get() { "閉じる".to_owned() } else { "変える".to_owned() }),
@@ -848,7 +848,7 @@ pub(crate) fn date_bar(date: RwSignal<String>, on_shift: Callback<i64>) -> Eleme
         ) {
             Text(
                 value: "‹",
-                style: css!(color: hex(TINT), font_size: px(34), padding: (px(0), px(12))),
+                style: computed(move || css!(color: hex(TINT), font_size: px(34), padding: (px(0), px(12)))),
                 on_tap: move |_| on_shift.run(-1),
             )
             View(
@@ -856,12 +856,12 @@ pub(crate) fn date_bar(date: RwSignal<String>, on_shift: Callback<i64>) -> Eleme
             ) {
                 Text(
                     value: computed(move || model::date_label(&date.get())),
-                    style: css!(color: hex(LABEL), font_size: px(20), font_weight: FontWeight::Numeric(600)),
+                    style: computed(move || css!(color: hex(LABEL), font_size: px(20), font_weight: FontWeight::Numeric(600))),
                 )
                 Show(when: move || !is_today.get()) {
                     Text(
                         value: "今日へ",
-                        style: css!(color: hex(TINT), font_size: px(15), margin_top: px(4)),
+                        style: computed(move || css!(color: hex(TINT), font_size: px(15), margin_top: px(4))),
                         on_tap: move |_| {
                             let today = model::tokyo_today();
                             let current = date.get_untracked();
@@ -878,7 +878,7 @@ pub(crate) fn date_bar(date: RwSignal<String>, on_shift: Callback<i64>) -> Eleme
             }
             Text(
                 value: "›",
-                style: css!(color: hex(TINT), font_size: px(34), padding: (px(0), px(12))),
+                style: computed(move || css!(color: hex(TINT), font_size: px(34), padding: (px(0), px(12)))),
                 on_tap: move |_| on_shift.run(1),
             )
         }
@@ -930,14 +930,14 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
             Show(when: move || confirmed.get()) {
                 Text(
                     value: "この日は確定しています。直すときは下の「確定を取り消す」を押してください。",
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))),
                 )
             }
 
             View(style: columns_style(split)) {
             View(style: column_style(split)) {
             SectionHeader(title: computed(|| "残高".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 // ① は打ち直せる。打ち直した日は、前の日に合わせない。
                 ForEach(
                     each: move || vec![(ledger.view.get(), confirmed.get())],
@@ -978,7 +978,7 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
             }
 
             SectionHeader(title: computed(|| "収入".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 ForEach(
                     each: move || {
                         let (view, locked) = (ledger.view.get(), confirmed.get());
@@ -1137,7 +1137,7 @@ fn expense_card(ledger: Ledger, id: String, locked: bool) -> Element {
     });
 
     render! {
-        View(style: group_style().margin_bottom(px(12))) {
+        View(style: computed(move || group_style().margin_bottom(px(12)))) {
             FieldRow(
                 label: category,
                 value: computed(move || if locked { voucher.get() } else if choosing.get() { "閉じる".to_owned() } else { "科目を変える".to_owned() }),
@@ -1205,11 +1205,11 @@ fn expense_card(ledger: Ledger, id: String, locked: bool) -> Element {
                                 .collect::<Vec<_>>()
                                 .join(" · ")
                         }),
-                        style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)),
+                        style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13))),
                     )
                     Text(
                         value: "この行を消す",
-                        style: css!(color: hex(RED), font_size: px(15)),
+                        style: computed(move || css!(color: hex(RED), font_size: px(15))),
                         on_tap: move |_| remove(),
                     )
                 }
@@ -1226,21 +1226,21 @@ pub(crate) fn amount_row(label: Signal<String>, initial: String, editable: bool,
     let input = InputRef::new();
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 padding_left: px(16),
                 min_height: px(48),
             )
-            .border_bottom(hairline()),
+            .border_bottom(hairline())),
         ) {
             Text(
                 value: label,
-                style: css!(color: hex(LABEL), font_size: px(17), flex_grow: 1.0, flex_shrink: 1.0),
+                style: computed(move || css!(color: hex(LABEL), font_size: px(17), flex_grow: 1.0, flex_shrink: 1.0)),
             )
             Show(when: move || invalid.get()) {
-                Text(value: "数字で", style: css!(color: hex(RED), font_size: px(13), margin_right: px(6)))
+                Text(value: "数字で", style: computed(move || css!(color: hex(RED), font_size: px(13), margin_right: px(6))))
             }
             Input(
                 text: text,
@@ -1262,7 +1262,7 @@ pub(crate) fn amount_row(label: Signal<String>, initial: String, editable: bool,
                         text.set(model::format_optional_yen(amount));
                     }
                 },
-                style: css!(
+                style: computed(move || css!(
                     width: px(140),
                     height: px(48),
                     font_size: px(17),
@@ -1270,9 +1270,9 @@ pub(crate) fn amount_row(label: Signal<String>, initial: String, editable: bool,
                     text_align: TextAlign::Right,
                     color: hex(if editable { LABEL } else { SECONDARY_LABEL }),
                     background_color: Color::rgba(0, 0, 0, 0.0),
-                ),
+                )),
             )
-            Text(value: "円", style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), margin_right: px(16)))
+            Text(value: "円", style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), margin_right: px(16))))
         }
     }
 }
@@ -1283,16 +1283,16 @@ pub(crate) fn text_row(label: &'static str, text: RwSignal<String>, editable: bo
     let input = InputRef::new();
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 padding_left: px(16),
                 min_height: px(48),
             )
-            .border_bottom(hairline()),
+            .border_bottom(hairline())),
         ) {
-            Text(value: label, style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), width: px(96), flex_shrink: 0.0))
+            Text(value: label, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), width: px(96), flex_shrink: 0.0)))
             Input(
                 text: text,
                 placeholder: "未入力",
@@ -1301,14 +1301,14 @@ pub(crate) fn text_row(label: &'static str, text: RwSignal<String>, editable: bo
                 on_focus: move |_| remember_focus(input),
                 on_submit: move |_| input.blur(),
                 on_input: move |value: String| on_text.run(value),
-                style: css!(
+                style: computed(move || css!(
                     flex_grow: 1.0,
                     height: px(48),
                     font_size: px(17),
                     padding_right: px(16),
                     color: hex(if editable { LABEL } else { SECONDARY_LABEL }),
                     background_color: Color::rgba(0, 0, 0, 0.0),
-                ),
+                )),
             )
         }
     }
@@ -1319,7 +1319,7 @@ pub(crate) fn text_row(label: &'static str, text: RwSignal<String>, editable: bo
 pub(crate) fn total_row(label: &'static str, amount: Signal<i64>) -> Element {
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -1327,12 +1327,12 @@ pub(crate) fn total_row(label: &'static str, amount: Signal<i64>) -> Element {
                 padding: (px(0), px(16)),
                 min_height: px(48),
             )
-            .border_bottom(hairline()),
+            .border_bottom(hairline())),
         ) {
-            Text(value: label, style: css!(color: hex(LABEL), font_size: px(17)))
+            Text(value: label, style: computed(move || css!(color: hex(LABEL), font_size: px(17))))
             Text(
                 value: computed(move || format!("{}円", model::format_yen(amount.get()))),
-                style: css!(color: hex(LABEL), font_size: px(17), font_weight: FontWeight::Numeric(600)),
+                style: computed(move || css!(color: hex(LABEL), font_size: px(17), font_weight: FontWeight::Numeric(600))),
             )
         }
     }
@@ -1343,7 +1343,7 @@ pub(crate) fn total_row(label: &'static str, amount: Signal<i64>) -> Element {
 pub(crate) fn field_row(label: Signal<String>, value: Signal<String>, on_tap: Callback<()>) -> Element {
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -1352,15 +1352,15 @@ pub(crate) fn field_row(label: Signal<String>, value: Signal<String>, on_tap: Ca
                 padding: (px(0), px(16)),
                 min_height: px(48),
             )
-            .border_bottom(hairline()),
+            .border_bottom(hairline())),
             on_tap: move |_| on_tap.call(),
         ) {
             Text(
                 value: label,
                 max_lines: 2u32,
-                style: css!(color: hex(LABEL), font_size: px(17), flex_shrink: 1.0),
+                style: computed(move || css!(color: hex(LABEL), font_size: px(17), flex_shrink: 1.0)),
             )
-            Text(value: value, style: css!(color: hex(TINT), font_size: px(15), flex_shrink: 0.0))
+            Text(value: value, style: computed(move || css!(color: hex(TINT), font_size: px(15), flex_shrink: 0.0)))
         }
     }
 }
@@ -1370,17 +1370,17 @@ pub(crate) fn field_row(label: Signal<String>, value: Signal<String>, on_tap: Ca
 pub(crate) fn button(label: &'static str, on_tap: Callback<()>) -> Element {
     render! {
         View(
-            style: group_style().margin_top(px(12)),
+            style: computed(move || group_style().margin_top(px(12))),
             on_tap: move |_| on_tap.call(),
         ) {
             Text(
                 value: label,
-                style: css!(
+                style: computed(move || css!(
                     color: hex(TINT),
                     font_size: px(17),
                     text_align: TextAlign::Center,
                     padding: (px(14), px(16)),
-                ),
+                )),
             )
         }
     }

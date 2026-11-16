@@ -67,11 +67,14 @@ const ORANGE: u32 = 0xC93400;
 const LOGO: u32 = 0x0A2540; // サインイン画面の「TF」
 const DISABLED: u32 = 0xE5E5EA; // 押せないボタンの丸
 
-/// 今、暗い表示（ダークモード）か。iPhone の設定が変わると `app` が書き換える。
-static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 外観 signal は画面の owner に継承され、computed style が変更を追跡する。
+#[derive(Clone, Copy)]
+struct Appearance(RwSignal<Option<bool>>);
 
 fn is_dark() -> bool {
-    DARK.load(std::sync::atomic::Ordering::Relaxed)
+    use_context::<Appearance>()
+        .and_then(|appearance| appearance.0.get())
+        .unwrap_or(false)
 }
 
 thread_local! {
@@ -175,7 +178,7 @@ const TAB_BAR_SPACE: f32 = 110.0;
 #[whisker::main]
 fn app() -> Element {
     // 明るい・暗いが分かってから画面を作る（起動直後に白く光らないように）。
-    // iPhone の設定が切り替わったら、新しい色で画面を作り直す。
+    // 初回の外観を待ち、それ以降は画面の状態を保って色だけ更新する。
     let dark = signal(None::<bool>);
     let wide = signal(None::<bool>);
     let wide_now = signal(false);
@@ -186,6 +189,7 @@ fn app() -> Element {
     let narrow_before = signal(None::<bool>);
     let width = signal(0.0_f32);
     provide_context(WindowWidth(width));
+    provide_context(Appearance(dark));
     render! {
         View(
             style: css!(flex_grow: 1.0, display: Display::Flex, flex_direction: FlexDirection::Column)
@@ -194,7 +198,6 @@ fn app() -> Element {
         ) {
             AppearanceObserver(on_change: move |value: bool| {
                 if dark.get_untracked() != Some(value) {
-                    DARK.store(value, std::sync::atomic::Ordering::Relaxed);
                     dark.set(Some(value));
                 }
             }, on_layout: move |(value, w): (bool, f32)| {
@@ -211,14 +214,19 @@ fn app() -> Element {
                     wide.set(Some(value));
                 }
             })
-            // 幅が分かるまで待ってから作る。広い・狭いが変わっても作り直さない（色が変わったときだけ）。
-            ForEach(
-                each: move || dark.get().filter(|_| wide.with(Option::is_some)).into_iter().collect::<Vec<_>>(),
-                key: |d: &bool| *d,
-                children: move |_: ReadSignal<bool>| render! { Root },
-            )
+            // 幅と外観の初回取得を待ち、以後は画面の状態を保つ。
+            AppearanceContent(dark: dark, wide: wide) { Root }
         }
     }
+}
+
+/// 外観が初めて分かるまで待つ。値が変わっても内容は再生成しない。
+#[component]
+fn appearance_content(dark: RwSignal<Option<bool>>, wide: RwSignal<Option<bool>>, children: Children) -> Element {
+    Show::builder()
+        .when(move || dark.get().is_some() && wide.get().is_some())
+        .children(children.clone())
+        .build()
 }
 
 /// ログイン状態と選んだテナントを持つ。画面はこの 2 つで決まる。
@@ -331,36 +339,36 @@ fn restore_failed(
         ) {
             Text(
                 value: "サインインを確かめられませんでした",
-                style: css!(color: hex(LABEL), font_size: px(20), font_weight: FontWeight::Bold),
+                style: computed(move || css!(color: hex(LABEL), font_size: px(20), font_weight: FontWeight::Bold)),
             )
             Text(
                 value: message,
-                style: css!(
+                style: computed(move || css!(
                     color: hex(SECONDARY_LABEL),
                     font_size: px(15),
                     text_align: TextAlign::Center,
-                ),
+                )),
             )
             View(
-                style: css!(
+                style: computed(move || css!(
                     padding: (px(12), px(28)),
                     border_radius: px(22),
                     background_color: hex(TINT),
-                ),
+                )),
                 on_tap: move |_| on_retry.run(()),
             ) {
                 Text(
                     value: "もう一度",
-                    style: css!(
+                    style: computed(move || css!(
                         color: Color::hex(0xFFFFFF),
                         font_size: px(17),
                         font_weight: FontWeight::Bold,
-                    ),
+                    )),
                 )
             }
             Text(
                 value: "サインインし直す",
-                style: css!(color: hex(TINT), font_size: px(15)),
+                style: computed(move || css!(color: hex(TINT), font_size: px(15))),
                 on_tap: move |_| on_sign_in.run(()),
             )
         }
@@ -452,24 +460,24 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                     Glass(corner_radius: 22.0_f32, style: fill(0.0))
                     Text(
                         value: "TF",
-                        style: css!(
+                        style: computed(move || css!(
                             color: hex(LOGO),
                             font_size: px(34),
                             font_weight: FontWeight::Bold,
-                        ),
+                        )),
                     )
                 }
                 Text(
                     value: "TACHYON Field",
-                    style: css!(
+                    style: computed(move || css!(
                         color: hex(LABEL),
                         font_size: px(34),
                         font_weight: FontWeight::Bold,
-                    ),
+                    )),
                 )
                 Text(
                     value: "アカウントでサインイン",
-                    style: css!(color: placeholder_color(), font_size: px(17)),
+                    style: computed(move || css!(color: placeholder_color(), font_size: px(17))),
                 )
             }
             // ガラスの板の上に入力欄 2 行、間に区切り線。
@@ -481,7 +489,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                 ),
             ) {
                 Glass(corner_radius: 20.0_f32, style: fill(0.0))
-                View(style: form_row_style().border_bottom(glass_hairline())) {
+                View(style: computed(move || form_row_style().border_bottom(glass_hairline()))) {
                     Input(
                         text: email,
                         placeholder: "メールアドレス",
@@ -490,7 +498,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                         autocorrect: false,
                         spell_check: false,
                         return_key: ReturnKey::Next,
-                        style: glass_input_style(),
+                        style: computed(move || glass_input_style()),
                     )
                 }
                 View(style: form_row_style()) {
@@ -500,7 +508,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                         secure: true,
                         return_key: ReturnKey::Go,
                         on_submit: move |_| submit(),
-                        style: glass_input_style(),
+                        style: computed(move || glass_input_style()),
                     )
                 }
             }
@@ -514,11 +522,11 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                 Show(when: move || !error.with(String::is_empty)) {
                     Text(
                         value: computed(move || error.get()),
-                        style: css!(
+                        style: computed(move || css!(
                             color: hex(RED),
                             font_size: px(13),
                             text_align: TextAlign::Center,
-                        ),
+                        )),
                     )
                 }
                 // 角の丸い大きなボタン（iOS の「続ける」ボタンの形）。
@@ -546,11 +554,11 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                             }
                             .to_owned()
                         }),
-                        style: css!(
+                        style: computed(move || css!(
                             color: Color::hex(0xFFFFFF),
                             font_size: px(17),
                             font_weight: FontWeight::Numeric(600),
-                        ),
+                        )),
                     )
                 }
             }
@@ -614,7 +622,7 @@ fn tenant_picker(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant
                         SectionHeader(
                             title: computed(move || format!("{} 件", tenants.with(Vec::len))),
                         )
-                        View(style: group_style()) {
+                        View(style: computed(move || group_style())) {
                             ForEach(
                                 each: move || tenants.get(),
                                 key: |t: &Tenant| t.id.clone(),
@@ -1227,16 +1235,16 @@ fn drawer_items(
                 Text(
                     value: tenant_name,
                     max_lines: 1u32,
-                    style: css!(
+                    style: computed(move || css!(
                         color: hex(LABEL),
                         font_size: px(28),
                         font_weight: FontWeight::Bold,
                         text_overflow: TextOverflow::Ellipsis,
-                    ),
+                    )),
                 )
                 Text(
                     value: environment,
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(14), margin_top: px(4)),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(14), margin_top: px(4))),
                 )
             }
             SystemMenuList(
@@ -1285,7 +1293,7 @@ fn drawer_items(
                         corner_radius: 24.0_f32,
                         style: css!(position: PositionKind::Absolute, top: px(0), bottom: px(0), left: px(0), right: px(0)),
                     )
-                    Text(value: "⚙\u{FE0E}", style: css!(color: hex(LABEL), font_size: px(28)))
+                    Text(value: "⚙\u{FE0E}", style: computed(move || css!(color: hex(LABEL), font_size: px(28))))
                 }
             }
             SystemSheet(
@@ -1394,21 +1402,21 @@ fn drawer_items(
                         Text(
                             value: computed(move || tenant_name.get()),
                             max_lines: 1u32,
-                            style: css!(
+                            style: computed(move || css!(
                                 color: hex(LABEL),
                                 font_size: px(20),
                                 font_weight: FontWeight::Bold,
                             )
-                            .text_overflow(TextOverflow::Ellipsis),
+                            .text_overflow(TextOverflow::Ellipsis)),
                         )
                         Text(
                             value: computed(move || format!("{} · タップで会社を切り替え", environment.get())),
-                            style: css!(color: hex(SECONDARY_LABEL), font_size: px(13)),
+                            style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13))),
                         )
                     }
                 }
                 SectionHeader(title: "分野")
-                View(style: group_style()) {
+                View(style: computed(move || group_style())) {
                     ForEach(
                         each: || (0..MENU.len()).collect::<Vec<usize>>(),
                         key: |i: &usize| *i,
@@ -1427,7 +1435,7 @@ fn drawer_items(
                     )
                 }
                 View(style: css!(height: px(32)))
-                View(style: group_style()) {
+                View(style: computed(move || group_style())) {
                     View(
                         style: css!(
                             display: Display::Flex,
@@ -1438,7 +1446,7 @@ fn drawer_items(
                     ) {
                         Text(
                             value: "サインアウト",
-                            style: css!(color: hex(RED), font_size: px(17)),
+                            style: computed(move || css!(color: hex(RED), font_size: px(17))),
                         )
                     }
                 }
@@ -1609,7 +1617,7 @@ fn menu_row(label: &'static str, color: u32, separator: bool, on_tap: Callback<(
             on_tap: move |_| on_tap.call(),
         ) {
             View(
-                style: css!(
+                style: computed(move || css!(
                     width: px(30),
                     height: px(30),
                     border_radius: px(7),
@@ -1618,19 +1626,19 @@ fn menu_row(label: &'static str, color: u32, separator: bool, on_tap: Callback<(
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     flex_shrink: 0.0,
-                ),
+                )),
             ) {
                 Text(
                     value: glyph.clone(),
-                    style: css!(
+                    style: computed(move || css!(
                         color: Color::hex(0xFFFFFF),
                         font_size: px(15),
                         font_weight: FontWeight::Bold,
-                    ),
+                    )),
                 )
             }
             View(
-                style: {
+                style: computed(move || {
                     let s = css!(
                         display: Display::Flex,
                         flex_direction: FlexDirection::Row,
@@ -1643,13 +1651,13 @@ fn menu_row(label: &'static str, color: u32, separator: bool, on_tap: Callback<(
                     } else {
                         s
                     }
-                },
+                }),
             ) {
                 Text(
                     value: label,
-                    style: css!(color: hex(LABEL), font_size: px(17), flex_grow: 1.0),
+                    style: computed(move || css!(color: hex(LABEL), font_size: px(17), flex_grow: 1.0)),
                 )
-                Text(value: "›", style: css!(color: hex(CHEVRON), font_size: px(26)))
+                Text(value: "›", style: computed(move || css!(color: hex(CHEVRON), font_size: px(26))))
             }
         }
     }
@@ -1928,14 +1936,14 @@ fn list_body(
                         placeholder: "検索",
                         return_key: ReturnKey::Search,
                         auto_capitalize: AutoCapitalize::None,
-                        style: css!(
+                        style: computed(move || css!(
                             height: px(36),
                             font_size: px(17),
                             padding: (px(0), px(10)),
                             border_radius: px(10),
                             background_color: hex(FILL),
                             color: hex(LABEL),
-                        ),
+                        )),
                     )
                 }
                 Show(when: move || loading.get()) {
@@ -1953,7 +1961,7 @@ fn list_body(
                     SectionHeader(
                         title: computed(move || format!("{} 件", with_list(visible, Vec::len))),
                     )
-                    View(style: group_style()) {
+                    View(style: computed(move || group_style())) {
                         ForEach(
                             each: move || visible.get(),
                             key: |item: &Value| features::id(item),
@@ -2103,24 +2111,24 @@ fn detail_body(feature: Feature, item: Value, selected: RwSignal<Option<Value>>)
                         }
                         Text(
                             value: computed(move || title.get()),
-                            style: css!(
+                            style: computed(move || css!(
                                 color: hex(LABEL),
                                 font_size: px(26),
                                 font_weight: FontWeight::Numeric(600),
                                 text_align: TextAlign::Center,
-                            ),
+                            )),
                         )
                         Show(when: move || has_status) {
                             View(
-                                style: css!(
+                                style: computed(move || css!(
                                     padding: (px(4), px(12)),
                                     border_radius: px(999),
                                     background_color: hex(FILL),
-                                ),
+                                )),
                             ) {
                                 Text(
                                     value: computed(move || status.get()),
-                                    style: css!(color: hex(LABEL), font_size: px(13)),
+                                    style: computed(move || css!(color: hex(LABEL), font_size: px(13))),
                                 )
                             }
                         }
@@ -2157,7 +2165,7 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
     });
     let last = computed(move || numbered.with(Vec::len).saturating_sub(1));
     render! {
-        View(style: group_style()) {
+        View(style: computed(move || group_style())) {
             ForEach(
                 each: move || numbered.get(),
                 key: |r: &(usize, String, String)| r.0,
@@ -2194,7 +2202,7 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                             ) {
                                 Text(
                                     value: label,
-                                    style: if inline {
+                                    style: computed(move || if inline {
                                         css!(
                                             color: hex(LABEL),
                                             font_size: px(17),
@@ -2203,11 +2211,11 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                                         )
                                     } else {
                                         css!(color: hex(LABEL), font_size: px(13))
-                                    },
+                                    }),
                                 )
                                 Text(
                                     value: value,
-                                    style: if inline {
+                                    style: computed(move || if inline {
                                         css!(
                                             color: hex(SECONDARY_LABEL),
                                             font_size: px(17),
@@ -2215,7 +2223,7 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                                         )
                                     } else {
                                         css!(color: hex(LABEL), font_size: px(17))
-                                    },
+                                    }),
                                 )
                             }
                         }
@@ -2304,7 +2312,7 @@ fn nav_bar(
             Text(
                 value: title,
                 max_lines: 1u32,
-                style: css!(
+                style: computed(move || css!(
                     position: PositionKind::Absolute,
                     left: px(96),
                     right: px(96),
@@ -2313,7 +2321,7 @@ fn nav_bar(
                     font_size: px(17),
                     font_weight: FontWeight::Numeric(600),
                 )
-                .text_overflow(TextOverflow::Ellipsis),
+                .text_overflow(TextOverflow::Ellipsis)),
             )
             View(
                 style: css!(
@@ -2352,28 +2360,28 @@ fn nav_bar(
                                 height: px(42),
                             ),
                         )
-                        View(style: menu_bar_style())
-                        View(style: menu_bar_style())
-                        View(style: menu_bar_style())
+                        View(style: computed(move || menu_bar_style()))
+                        View(style: computed(move || menu_bar_style()))
+                        View(style: computed(move || menu_bar_style()))
                     }
                 }
                 Show(when: move || has_back) {
                     Text(
                         value: "‹",
-                        style: css!(
+                        style: computed(move || css!(
                             color: hex(TINT),
                             font_size: px(34),
                             font_weight: FontWeight::Numeric(300),
-                        ),
+                        )),
                     )
-                    Text(value: back_label, style: css!(color: hex(TINT), font_size: px(17)))
+                    Text(value: back_label, style: computed(move || css!(color: hex(TINT), font_size: px(17))))
                 }
             }
             View(style: css!(padding: (px(6), px(8))), on_tap: move |_| on_action.call()) {
                 Show(when: move || has_action) {
                     Text(
                         value: action_label,
-                        style: css!(color: hex(TINT), font_size: px(17)),
+                        style: computed(move || css!(color: hex(TINT), font_size: px(17))),
                     )
                 }
             }
@@ -2386,12 +2394,12 @@ fn large_title(title: &'static str) -> Element {
     render! {
         Text(
             value: title,
-            style: css!(
+            style: computed(move || css!(
                 color: hex(LABEL),
                 font_size: px(34),
                 font_weight: FontWeight::Bold,
                 padding: (px(0), px(16), px(8), px(16)),
-            ),
+            )),
         )
     }
 }
@@ -2402,11 +2410,11 @@ fn section_header(title: Signal<String>) -> Element {
     render! {
         Text(
             value: title,
-            style: css!(
+            style: computed(move || css!(
                 color: hex(SECONDARY_LABEL),
                 font_size: px(13),
                 padding: (px(16), px(32), px(6), px(32)),
-            ),
+            )),
         )
     }
 }
@@ -2467,32 +2475,32 @@ fn list_row(
                     Text(
                         value: title,
                         max_lines: 1u32,
-                        style: css!(
+                        style: computed(move || css!(
                             color: hex(LABEL),
                             font_size: px(17),
                         )
-                        .text_overflow(TextOverflow::Ellipsis),
+                        .text_overflow(TextOverflow::Ellipsis)),
                     )
                     Show(when: move || !subtitle.get().is_empty()) {
                         Text(
                             value: subtitle,
                             max_lines: 1u32,
-                            style: css!(
+                            style: computed(move || css!(
                                 color: hex(subtitle_color),
                                 font_size: px(15),
                             )
-                            .text_overflow(TextOverflow::Ellipsis),
+                            .text_overflow(TextOverflow::Ellipsis)),
                         )
                     }
                 }
                 Text(
                     value: trailing,
                     max_lines: 1u32,
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_shrink: 0.0),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_shrink: 0.0)),
                 )
                 Text(
                     value: "›",
-                    style: css!(color: hex(CHEVRON), font_size: px(26), flex_shrink: 0.0),
+                    style: computed(move || css!(color: hex(CHEVRON), font_size: px(26), flex_shrink: 0.0)),
                 )
             }
         }
@@ -2504,7 +2512,7 @@ fn list_row(
 fn avatar(name: Signal<String>, size: f32) -> Element {
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 width: px(size),
                 height: px(size),
                 border_radius: px(size / 2.0),
@@ -2513,15 +2521,15 @@ fn avatar(name: Signal<String>, size: f32) -> Element {
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
                 flex_shrink: 0.0,
-            ),
+            )),
         ) {
             Text(
                 value: computed(move || initial(&name.get())),
-                style: css!(
+                style: computed(move || css!(
                     color: Color::hex(0xFFFFFF),
                     font_size: px(size * 0.42),
                     font_weight: FontWeight::Numeric(600),
-                ),
+                )),
             )
         }
     }
@@ -2532,12 +2540,12 @@ fn notice(message: &'static str) -> Element {
     render! {
         Text(
             value: message,
-            style: css!(
+            style: computed(move || css!(
                 color: hex(SECONDARY_LABEL),
                 font_size: px(15),
                 padding: (px(32), px(16)),
                 text_align: TextAlign::Center,
-            ),
+            )),
         )
     }
 }
@@ -2547,12 +2555,12 @@ fn error_notice(message: Signal<String>) -> Element {
     render! {
         Text(
             value: message,
-            style: css!(
+            style: computed(move || css!(
                 color: hex(RED),
                 font_size: px(15),
                 padding: (px(16), px(32)),
                 text_align: TextAlign::Center,
-            ),
+            )),
         )
     }
 }
@@ -2688,3 +2696,6 @@ fn hairline() -> Border {
         .color(hex(SEPARATOR))
         .style(BorderStyle::Solid)
 }
+
+#[cfg(test)]
+mod theme_tests;
