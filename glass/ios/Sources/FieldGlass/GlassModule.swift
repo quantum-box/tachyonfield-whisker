@@ -75,6 +75,12 @@ public final class GlassModule: Module {
             View("field-glass:KeyboardObserver", FieldKeyboardObserverView.self) {
                 Events("change")
             }
+            View("field-glass:RefreshControl", FieldRefreshControlView.self) {
+                Prop("refreshing") { (view: FieldRefreshControlView, value: WhiskerValue) in
+                    view.setRefreshing(value.asBool ?? (value.asString == "true"))
+                }
+                Events("refresh")
+            }
             View("field-glass:AttachButton", FieldAttachButtonView.self) {
                 Events("pick")
             }

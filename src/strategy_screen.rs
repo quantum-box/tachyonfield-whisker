@@ -36,6 +36,18 @@ struct Tree {
 
 impl Tree {
     fn load(self) {
+        self.fetch(false);
+    }
+
+    /// 引っ張って更新。読み込み中なら新しく頼まず、今の読み込みが終わるのを待つ。
+    /// 読めなかったときは、今出しているツリーを残したままエラーを出す。
+    fn refresh(self) {
+        if !self.loading.get_untracked() {
+            self.fetch(true);
+        }
+    }
+
+    fn fetch(self, keep_on_error: bool) {
         let Some(current) = self.tenant.get_untracked() else {
             return;
         };
@@ -64,7 +76,9 @@ impl Tree {
                     self.workspace.set(Some(workspace));
                 }
                 Err(message) => {
-                    self.workspace.set(None);
+                    if !keep_on_error {
+                        self.workspace.set(None);
+                    }
                     self.error.set(message);
                     return;
                 }
@@ -160,11 +174,15 @@ pub(crate) fn strategy_screen(
                     title: "思想と行動",
                     back_label: "",
                     on_back: |_| {},
-                    action_label: "再読み込み",
-                    on_action: move |_| tree.load(),
+                    action_label: "",
+                    on_action: |_| {},
                 )
                 ScrollView(style: scroll_style()) {
                     View(style: scroll_content_style()) {
+                        RefreshControl(
+                            refreshing: computed(move || tree.loading.get()),
+                            on_refresh: move |_| tree.refresh(),
+                        )
                         DivisionTabs(tree: tree)
                         Legend(tree: tree)
                         Show(when: move || tree.loading.get() && tree.workspace.with(Option::is_none)) {
