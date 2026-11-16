@@ -237,10 +237,29 @@ pub fn agent_screen(
             );
         }
     });
+    // 一番下を見ているか・指で動かしているか。キーボードの開け閉めで見える高さが変わったときは、
+    // 一番下を見ていたときだけ合わせ直す（上の会話を読んでいる途中や、引き下ろし中に勝手に動かさない）。
+    let at_bottom = signal(true);
+    let dragging = signal(false);
+    let mut last_content = 0.0_f64;
     effect(move || {
-        let bottom = (content_height.get() - viewport_height.get()).max(0.0);
-        scroller.scroll_to(bottom, false);
+        let content = content_height.get();
+        let bottom = (content - viewport_height.get()).max(0.0);
+        let grew = content > last_content;
+        last_content = content;
+        if grew || (at_bottom.get_untracked() && !dragging.get_untracked()) {
+            scroller.scroll_to(bottom, false);
+        }
     });
+    let on_scroll = move |e: whisker::event::ScrollEvent| {
+        let d = e.detail;
+        dragging.set(d.is_dragging);
+        at_bottom.set(d.scroll_top + d.viewport_height >= d.scroll_height - 24.0);
+        // iOS は `KeyboardDismiss` が閉じる。ほかでは、会話を下へ引いたら入力欄を外す。
+        if cfg!(not(target_os = "ios")) && d.is_dragging && d.delta_y < 0.0 {
+            input.blur();
+        }
+    };
 
     let send = move || {
         let typed = draft.get_untracked().trim().to_owned();
@@ -483,7 +502,7 @@ pub fn agent_screen(
                 },
             )
             KeyboardObserver(on_change: move |height: f32| keyboard.set(height))
-            ScrollView(style: scroll_style(), element_ref: scroller.r()) {
+            ScrollView(style: scroll_style(), element_ref: scroller.r(), on_scroll: on_scroll) {
                 View(
                     element_ref: content.r(),
                     style: computed(move || {
@@ -647,6 +666,8 @@ fn composer(
             ) {
                 // ガラスの丸い枠（iOS 26 のメッセージ入力欄の形）。
                 Glass(corner_radius: 25.0_f32, style: glass_fill())
+                // 枠の中（添付・送るボタンのすき間も）をタップしても、キーボードは閉じない。
+                field_glass::KeyboardKeep()
                 AttachButton(
                     on_pick: move |file: field_glass::PickedFile| {
                         pending.update(|list| list.push(file))
