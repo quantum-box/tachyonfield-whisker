@@ -457,6 +457,7 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
 #[component]
 fn register_sheet(sheet: Sheet) -> Element {
     let confirmed = computed(move || sheet.confirmed());
+    let split = crate::cash_book_screen::two_columns();
     let check = computed(move || sheet.day.with(|d| d.as_ref().map(Day::amount_check).unwrap_or_default()));
     let status = computed(move || match sheet.state.get() {
         State::Idle => String::new(),
@@ -531,6 +532,9 @@ fn register_sheet(sheet: Sheet) -> Element {
                                     )
                                 }
                             }
+                            // iPad で広いときは、紙のレジ管理表のように開始時と終了時を横に並べる。
+                            View(style: columns_style(split)) {
+                            View(style: column_style(split)) {
                             SectionHeader(title: computed(|| "開始時".to_owned()))
                             View(style: group_style()) {
                                 Show(when: move || !locked && (has_previous.get() || from_previous.get())) {
@@ -546,9 +550,13 @@ fn register_sheet(sheet: Sheet) -> Element {
                                 }
                                 CountTable(sheet: sheet, closing: false, locked: locked || from_previous.get_untracked())
                             }
+                            }
+                            View(style: column_style(split)) {
                             SectionHeader(title: computed(|| "終了時".to_owned()))
                             View(style: group_style()) {
                                 CountTable(sheet: sheet, closing: true, locked: locked)
+                            }
+                            }
                             }
                             SectionHeader(title: computed(|| "実績".to_owned()))
                             View(style: group_style()) {

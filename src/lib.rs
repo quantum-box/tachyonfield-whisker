@@ -72,6 +72,55 @@ fn is_dark() -> bool {
     DARK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+thread_local! {
+    /// iPad の広い表示か（全画面か広めの分割）。横のメニューを出しっぱなしにし、下のタブは出さない。
+    /// 画面は作り直さず（ログインや Agent との会話を残すため）、これを読む所だけが切り替わる。
+    static WIDE: std::cell::Cell<Option<RwSignal<bool>>> = const { std::cell::Cell::new(None) };
+    /// iPad の広い表示で、横のメニューを閉じているか（上の帯の左のボタンで出し入れする）。
+    static SIDEBAR_HIDDEN: std::cell::Cell<Option<RwSignal<bool>>> = const { std::cell::Cell::new(None) };
+}
+
+/// 横のメニューを閉じているか。
+fn sidebar_hidden() -> bool {
+    SIDEBAR_HIDDEN.with(|h| h.get()).is_some_and(|h| h.get())
+}
+
+/// 横のメニューを出す・閉じる。
+fn toggle_sidebar() {
+    if let Some(h) = SIDEBAR_HIDDEN.with(|h| h.get()) {
+        h.update(|v| *v = !*v);
+    }
+}
+
+/// iPad で、横のメニューが出ているか。
+fn sidebar_shown() -> bool {
+    is_wide() && !sidebar_hidden()
+}
+
+/// 今、iPad の広い表示か。画面の部品の中で読むと、切り替わったときに描き直される。
+fn is_wide() -> bool {
+    WIDE.with(|w| w.get()).is_some_and(|w| w.get())
+}
+
+/// 画面（ウィンドウ）の幅。回すと変わる。
+#[derive(Clone, Copy)]
+struct WindowWidth(RwSignal<f32>);
+
+/// 表の画面（横のメニューを除いた部分）の幅。iPad で 2 列に並べるかを決めるのに使う。
+pub(crate) fn pane_width() -> ReadSignal<f32> {
+    let width = use_context::<WindowWidth>().map(|w| w.0);
+    computed(move || {
+        let w = width.map_or(0.0, |w| w.get());
+        if sidebar_shown() { w - DRAWER_WIDTH } else { w }
+    })
+}
+
+/// これより狭い画面（iPad mini の縦など）では、横のメニューを最初は閉じておく。
+const SIDEBAR_OPEN_WIDTH: f32 = 900.0;
+
+/// 2 列に並べるのに要る、表の画面の幅。
+pub(crate) const TWO_COLUMN_WIDTH: f32 = 760.0;
+
 /// 明るい表示の色を渡すと、今の表示（明るい・暗い）に合う色を返す。
 /// 対応のない色（機能ごとのアイコンの色など）は、どちらでもそのまま使う。
 fn hex(light: u32) -> Color {
@@ -126,6 +175,15 @@ fn app() -> Element {
     // 明るい・暗いが分かってから画面を作る（起動直後に白く光らないように）。
     // iPhone の設定が切り替わったら、新しい色で画面を作り直す。
     let dark = signal(None::<bool>);
+    let wide = signal(None::<bool>);
+    let wide_now = signal(false);
+    WIDE.with(|w| w.set(Some(wide_now)));
+    let hidden = signal(false);
+    SIDEBAR_HIDDEN.with(|h| h.set(Some(hidden)));
+    // 前に測ったとき、狭かったか（横のメニューを最初から閉じておく幅か）。
+    let narrow_before = signal(None::<bool>);
+    let width = signal(0.0_f32);
+    provide_context(WindowWidth(width));
     render! {
         View(
             style: css!(flex_grow: 1.0, display: Display::Flex, flex_direction: FlexDirection::Column)
@@ -137,9 +195,23 @@ fn app() -> Element {
                     DARK.store(value, std::sync::atomic::Ordering::Relaxed);
                     dark.set(Some(value));
                 }
+            }, on_layout: move |(value, w): (bool, f32)| {
+                width.set(w);
+                // iPad mini の縦のような狭い画面では、横のメニューを最初は閉じておく（メールアプリと同じ）。
+                // 回して広さが変わったときだけ合わせ直し、それ以外は自分で開け閉めしたままにする。
+                let narrow = w < SIDEBAR_OPEN_WIDTH;
+                if narrow_before.get_untracked() != Some(narrow) {
+                    narrow_before.set(Some(narrow));
+                    hidden.set(narrow);
+                }
+                if wide.get_untracked() != Some(value) {
+                    wide_now.set(value);
+                    wide.set(Some(value));
+                }
             })
+            // 幅が分かるまで待ってから作る。広い・狭いが変わっても作り直さない（色が変わったときだけ）。
             ForEach(
-                each: move || dark.get().into_iter().collect::<Vec<_>>(),
+                each: move || dark.get().filter(|_| wide.with(Option::is_some)).into_iter().collect::<Vec<_>>(),
                 key: |d: &bool| *d,
                 children: move |_: ReadSignal<bool>| render! { Root },
             )
@@ -640,6 +712,12 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
     // 指を置いた位置（x, y）と、そのときの表の画面の位置。
     let start = signal(None::<(f32, f32, f32)>);
     provide_context(Drawer(open));
+    // iPad の広い表示に変わったら、引き出していたメニューは閉じる（開いたままだと表の画面を触れない）。
+    effect(move || {
+        if is_wide() {
+            open.set(false);
+        }
+    });
     let back = BackSwipe {
         target: signal(None),
         drag: signal(None),
@@ -679,6 +757,31 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
             SideMenu(token: token, tenant: tenant, area: area, page: page, open: open)
             View(
                 style: computed(move || {
+                    // iPad の広い表示：横のメニューの右に並べて置く（引いて動かさない）。
+                    // 横のメニューを閉じたら、表の画面を左端まで広げる。
+                    if is_wide() {
+                        let safe_top = insets.get().top as f32;
+                        let shown = !sidebar_hidden();
+                        let s = css!(
+                            position: PositionKind::Absolute,
+                            top: px(-safe_top),
+                            padding_top: px(safe_top),
+                            bottom: px(0),
+                            left: px(0),
+                            right: px(0),
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Column,
+                            background_color: hex(SYSTEM_BACKGROUND),
+                            overflow: Overflow::Hidden,
+                        )
+                        .z_index(5);
+                        let s = if shown { s.left(px(DRAWER_WIDTH)).border_left(hairline()) } else { s };
+                        return s.transition(
+                            Transition::new(TransitionPropertyKind::name("left"))
+                                .duration(ms(260))
+                                .timing(EasingFunction::EaseOut),
+                        );
+                    }
                     let x = offset.get();
                     let progress = (x / DRAWER_WIDTH).clamp(0.0, 1.0);
                     let shadow = progress * 0.22;
@@ -725,6 +828,9 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                 }),
                 // 画面のどこからでも、左から右へ引けばメニューが出る（開いているときは右から左で閉じる）。
                 on_capture_touchstart: move |e: TouchEvent| {
+                    if is_wide() {
+                        return;
+                    }
                     let (x, y) = (e.detail.x as f32, e.detail.y as f32);
                     start.set(Some((x, y, offset.get_untracked())));
                 },
@@ -798,7 +904,10 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                 Show(when: move || page.get() == Page::Agent) {
                     AgentScreen(token: token, tenant: tenant, chat: chat)
                 }
-                TabBar(area: area, page: page)
+                // iPad の広い表示では、横のメニューで機能を選ぶので下のタブは出さない。
+                Show(when: move || !is_wide()) {
+                    TabBar(area: area, page: page)
+                }
                 // 開いている間は表の画面を触れないようにし、タップで閉じる。
                 Show(when: move || open.get()) {
                     View(
@@ -951,6 +1060,36 @@ fn drawer_items(
 
     let sections = computed(move || {
         let selected_area = area.get();
+        // iPad の広い表示：分野ごとの見出しの下に機能を並べ、押せばその画面を開く（下のタブの代わり）。
+        if is_wide() {
+            let current = page.get();
+            let mut list: Vec<serde_json::Value> = MENU
+                .iter()
+                .enumerate()
+                .map(|(a, (name, items))| {
+                    let rows: Vec<serde_json::Value> = items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| {
+                            json!({
+                                "key": format!("feature:{a}:{i}"),
+                                "title": f.label,
+                                "symbol": feature_symbol(f.label),
+                                "accessory": if a == selected_area && current == Page::Feature(i) { "check" } else { "none" },
+                            })
+                        })
+                        .collect();
+                    json!({ "title": name, "rows": rows })
+                })
+                .collect();
+            list.push(json!({ "title": "", "rows": [{
+                "key": "agent",
+                "title": "Field Agent",
+                "symbol": "sparkles",
+                "accessory": if current == Page::Agent { "check" } else { "none" },
+            }] }));
+            return serde_json::Value::Array(list).to_string();
+        }
         let areas: Vec<serde_json::Value> = MENU
             .iter()
             .enumerate()
@@ -1096,6 +1235,15 @@ fn drawer_items(
                 on_select: move |key: String| {
                     if let Some(index) = key.strip_prefix("area:").and_then(|i| i.parse().ok()) {
                         choose_area(index, area, page, open);
+                    } else if let Some((a, i)) = key
+                        .strip_prefix("feature:")
+                        .and_then(|rest| rest.split_once(':'))
+                        .and_then(|(a, i)| Some((a.parse::<usize>().ok()?, i.parse::<usize>().ok()?)))
+                    {
+                        area.set(a);
+                        page.set(Page::Feature(i));
+                    } else if key == "agent" {
+                        page.set(Page::Agent);
                     }
                 },
                 style: css!(flex_grow: 1.0).flex_basis(px(0)).min_height(px(0)),
@@ -2091,12 +2239,16 @@ fn nav_bar(
         SystemNavBar(
             title: title.to_owned(),
             back: back_label.to_owned(),
-            menu: drawer.is_some(),
+            menu: computed(move || drawer.is_some()),
+            // iPad の広い表示では「☰」の代わりに、横のメニューを出し入れするボタン。
+            menu_icon: computed(move || if is_wide() { "sidebar.left".to_owned() } else { String::new() }),
             action: action_label.to_owned(),
             on_press: move |which: String| match which.as_str() {
                 "back" => on_back.call(),
                 "menu" => {
-                    if let Some(Drawer(open)) = drawer {
+                    if is_wide() {
+                        toggle_sidebar();
+                    } else if let Some(Drawer(open)) = drawer {
                         open.set(true);
                     }
                 }
@@ -2121,7 +2273,7 @@ fn nav_bar(
     let has_back = !back_label.is_empty();
     let has_action = !action_label.is_empty();
     // 戻る先が無い画面では、左上に裏のメニューを開く「☰」を出す。
-    let drawer = if has_back {
+    let drawer = if has_back || is_wide() {
         None
     } else {
         use_context::<Drawer>()

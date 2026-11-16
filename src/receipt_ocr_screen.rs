@@ -273,6 +273,10 @@ pub fn receipt_ocr_screen(
     }
     on_cleanup(move || alive.store(false, Ordering::Relaxed));
 
+    // iPad で広いときは、左に一覧、右に選んだ証憑（メールアプリのような 2 列）。
+    let pane = crate::pane_width();
+    let split = computed(move || pane.get() >= crate::TWO_COLUMN_WIDTH);
+    let opened = move || ocr.selected.with(|s| s.as_ref().map(|r| r.id().to_owned())).into_iter().collect::<Vec<_>>();
     render! {
         View(style: screen_style()) {
             NavBar(
@@ -282,16 +286,53 @@ pub fn receipt_ocr_screen(
                 action_label: "更新",
                 on_action: move |_| ocr.load(),
             )
-            ScrollView(style: scroll_style()) {
-                View(style: scroll_content_style().padding_bottom(px(120))) {
-                    Show(when: move || ocr.selected.with(Option::is_none)) {
+            // 一覧と詳細は 1 つずつだけ作り、並べ方だけを変える（回しても入力中のフォームが消えないように）。
+            // 狭いとき：選んでいなければ一覧、選んでいれば詳細を出す。広いとき：左に一覧、右に詳細。
+            View(
+                style: computed(move || {
+                    css!(display: Display::Flex, flex_direction: if split.get() { FlexDirection::Row } else { FlexDirection::Column }, flex_grow: 1.0)
+                        .flex_basis(px(0))
+                        .min_height(px(0))
+                }),
+            ) {
+                ScrollView(
+                    style: computed(move || {
+                        let chosen = ocr.selected.with(Option::is_some);
+                        if split.get() {
+                            css!(width: px(380), flex_shrink: 0.0).border_right(hairline())
+                        } else if chosen {
+                            css!(display: Display::None)
+                        } else {
+                            scroll_style()
+                        }
+                    }),
+                ) {
+                    View(style: scroll_content_style().padding_bottom(px(120))) {
                         ListView(ocr: ocr)
                     }
-                    ForEach(
-                        each: move || ocr.selected.with(|s| s.as_ref().map(|r| r.id().to_owned())).into_iter().collect::<Vec<_>>(),
-                        key: |id: &String| id.clone(),
-                        children: move |_id: ReadSignal<String>| render! { Detail(ocr: ocr) },
-                    )
+                }
+                ScrollView(
+                    style: computed(move || {
+                        if !split.get() && ocr.selected.with(Option::is_none) {
+                            css!(display: Display::None)
+                        } else {
+                            css!(flex_grow: 1.0).flex_basis(px(0)).min_width(px(0)).min_height(px(0))
+                        }
+                    }),
+                ) {
+                    View(style: scroll_content_style().padding_bottom(px(120))) {
+                        Show(when: move || split.get() && ocr.selected.with(Option::is_none)) {
+                            Text(
+                                value: "左の一覧から証憑を選ぶと、ここに原本と読み取り結果が出ます。",
+                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), padding: (px(80), px(40)), text_align: TextAlign::Center),
+                            )
+                        }
+                        ForEach(
+                            each: opened,
+                            key: |id: &String| id.clone(),
+                            children: move |_id: ReadSignal<String>| render! { Detail(ocr: ocr, split: split) },
+                        )
+                    }
                 }
             }
         }
@@ -388,10 +429,12 @@ fn list_view(ocr: Ocr) -> Element {
                                 model::status_label(&r.receipt.status),
                             );
                             let value = r.summary();
+                            let id = r.id().to_owned();
+                            let chosen = computed(move || ocr.selected.with(|s| s.as_ref().is_some_and(|s| s.id() == id)));
                             render! {
                                 FieldRow(
                                     label: computed(move || label.clone()),
-                                    value: computed(move || value.clone()),
+                                    value: computed(move || if chosen.get() { format!("{value} ●") } else { value.clone() }),
                                     on_tap: move |_| ocr.selected.set(Some(r.clone())),
                                 )
                             }
@@ -408,7 +451,7 @@ fn list_view(ocr: Ocr) -> Element {
 
 /// 1 件の詳細と、その証憑でできること。
 #[component]
-fn detail(ocr: Ocr) -> Element {
+fn detail(ocr: Ocr, split: ReadSignal<bool>) -> Element {
     let r = computed(move || ocr.selected.get());
     let get = move |f: fn(&OcrReceipt) -> String| {
         computed(move || r.with(|r| r.as_ref().map(f).unwrap_or_default()))
@@ -559,14 +602,16 @@ fn detail(ocr: Ocr) -> Element {
 
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
-            View(style: group_style().margin_top(px(12))) {
-                FieldRow(label: computed(|| "‹ 証憑の一覧へ".to_owned()), value: computed(String::new), on_tap: move |_| ocr.selected.set(None))
+            Show(when: move || !split.get()) {
+                View(style: group_style().margin_top(px(12))) {
+                    FieldRow(label: computed(|| "‹ 証憑の一覧へ".to_owned()), value: computed(String::new), on_tap: move |_| ocr.selected.set(None))
+                }
             }
             Show(when: move || r.with(|r| r.as_ref().is_some_and(|r| r.file_url.is_some()))) {
                 View(style: css!(padding: (px(12), px(16), px(0), px(16)))) {
                     field_glass::DocumentPreview(
                         url: computed(move || r.with(|r| r.as_ref().and_then(|r| r.file_url.clone()).unwrap_or_default())),
-                        style: css!(width: percent(100), height: px(360)),
+                        style: computed(move || css!(width: percent(100), height: px(if split.get() { 520 } else { 360 }))),
                     )
                 }
             }

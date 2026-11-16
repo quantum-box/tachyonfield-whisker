@@ -293,26 +293,47 @@ pub struct AppearanceDetail {
     pub dark: f64,
 }
 
+/// 画面の幅が変わったときの知らせ。`wide` は iPad の広い表示（横の大きさが regular で幅 700 以上）なら 1。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct LayoutEvent {
+    #[serde(default)]
+    pub detail: LayoutDetail,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct LayoutDetail {
+    #[serde(default)]
+    pub wide: f64,
+    /// 画面（ウィンドウ）の幅（pt）。
+    #[serde(default)]
+    pub width: f64,
+}
+
 #[doc(hidden)]
 #[whisker::module_element(name = "field-glass:AppearanceObserver", measurement = None)]
-pub fn native_appearance_observer(style: Style, on_change: AppearanceEvent) {}
+pub fn native_appearance_observer(style: Style, on_change: AppearanceEvent, on_layout: LayoutEvent) {}
 
 /// 見えない部品。iPhone が暗い表示（ダークモード）かどうかを、置かれたときと
-/// 切り替わるたびに知らせる（暗いなら true）。iOS 以外はすぐに false を 1 回だけ知らせる。
+/// 切り替わるたびに知らせる（暗いなら true）。あわせて、iPad の広い表示か（true）と
+/// 画面の幅を `on_layout` で知らせる。iOS 以外はすぐに false と (false, 0) を 1 回だけ知らせる。
 #[cfg(target_os = "ios")]
 #[component]
-pub fn appearance_observer(on_change: Callback<bool>) -> Element {
+pub fn appearance_observer(on_change: Callback<bool>, on_layout: Callback<(bool, f32)>) -> Element {
     use whisker::css::PositionKind;
     NativeAppearanceObserver::builder()
         .style(css!(position: PositionKind::Absolute, width: px(0), height: px(0)))
         .on_change(move |e: AppearanceEvent| on_change.run(e.detail.dark > 0.5))
+        .on_layout(move |e: LayoutEvent| on_layout.run((e.detail.wide > 0.5, e.detail.width as f32)))
         .build()
 }
 
 #[cfg(not(target_os = "ios"))]
 #[component]
-pub fn appearance_observer(on_change: Callback<bool>) -> Element {
+pub fn appearance_observer(on_change: Callback<bool>, on_layout: Callback<(bool, f32)>) -> Element {
     on_change.run(false);
+    on_layout.run((false, 0.0));
     render! { View() }
 }
 
@@ -337,6 +358,7 @@ pub fn native_nav_bar(
     title: Signal<String>,
     back: Signal<String>,
     menu: Signal<bool>,
+    menu_icon: Signal<String>,
     action: Signal<String>,
     style: Style,
     on_press: NavPressEvent,
@@ -355,7 +377,8 @@ pub fn native_nav_bar(
 pub fn nav_bar(
     title: String,
     back: String,
-    menu: bool,
+    menu: Signal<bool>,
+    menu_icon: Signal<String>,
     action: String,
     on_press: Callback<String>,
     style: Style,
@@ -364,6 +387,7 @@ pub fn nav_bar(
         .title(title.clone())
         .back(back.clone())
         .menu(menu)
+        .menu_icon(menu_icon)
         .action(action.clone())
         .style(style.clone())
         .on_press(move |e: NavPressEvent| on_press.run(e.detail.which))

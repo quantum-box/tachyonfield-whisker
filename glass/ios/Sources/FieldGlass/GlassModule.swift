@@ -99,7 +99,7 @@ public final class GlassModule: Module {
                 }
             }
             View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
-                Events("change")
+                Events("change", "layout")
             }
             View("field-glass:NavBar", FieldNavBarView.self) {
                 Prop("title") { (view: FieldNavBarView, value: WhiskerValue) in
@@ -110,6 +110,9 @@ public final class GlassModule: Module {
                 }
                 Prop("menu") { (view: FieldNavBarView, value: WhiskerValue) in
                     view.setMenu(value.asBool ?? (value.asString == "true"))
+                }
+                Prop("menu-icon") { (view: FieldNavBarView, value: WhiskerValue) in
+                    view.setMenuIcon(value.asString ?? "")
                 }
                 Prop("action") { (view: FieldNavBarView, value: WhiskerValue) in
                     view.setAction(value.asString ?? "")
