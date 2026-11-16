@@ -72,12 +72,15 @@ fn is_dark() -> bool {
     DARK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// iPad の広い表示か（全画面か広めの分割）。横のメニューを出しっぱなしにし、下のタブは出さない。
-/// 変わったら `app` が画面を作り直す。
-static WIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    /// iPad の広い表示か（全画面か広めの分割）。横のメニューを出しっぱなしにし、下のタブは出さない。
+    /// 画面は作り直さず（ログインや Agent との会話を残すため）、これを読む所だけが切り替わる。
+    static WIDE: std::cell::Cell<Option<RwSignal<bool>>> = const { std::cell::Cell::new(None) };
+}
 
+/// 今、iPad の広い表示か。画面の部品の中で読むと、切り替わったときに描き直される。
 fn is_wide() -> bool {
-    WIDE.load(std::sync::atomic::Ordering::Relaxed)
+    WIDE.with(|w| w.get()).is_some_and(|w| w.get())
 }
 
 /// 画面（ウィンドウ）の幅。回すと変わる。
@@ -151,6 +154,8 @@ fn app() -> Element {
     // iPhone の設定が切り替わったら、新しい色で画面を作り直す。
     let dark = signal(None::<bool>);
     let wide = signal(None::<bool>);
+    let wide_now = signal(false);
+    WIDE.with(|w| w.set(Some(wide_now)));
     let width = signal(0.0_f32);
     provide_context(WindowWidth(width));
     render! {
@@ -167,14 +172,15 @@ fn app() -> Element {
             }, on_layout: move |(value, w): (bool, f32)| {
                 width.set(w);
                 if wide.get_untracked() != Some(value) {
-                    WIDE.store(value, std::sync::atomic::Ordering::Relaxed);
+                    wide_now.set(value);
                     wide.set(Some(value));
                 }
             })
+            // 幅が分かるまで待ってから作る。広い・狭いが変わっても作り直さない（色が変わったときだけ）。
             ForEach(
-                each: move || dark.get().zip(wide.get()).into_iter().collect::<Vec<_>>(),
-                key: |d: &(bool, bool)| *d,
-                children: move |_: ReadSignal<(bool, bool)>| render! { Root },
+                each: move || dark.get().filter(|_| wide.with(Option::is_some)).into_iter().collect::<Vec<_>>(),
+                key: |d: &bool| *d,
+                children: move |_: ReadSignal<bool>| render! { Root },
             )
         }
     }
@@ -673,6 +679,12 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
     // 指を置いた位置（x, y）と、そのときの表の画面の位置。
     let start = signal(None::<(f32, f32, f32)>);
     provide_context(Drawer(open));
+    // iPad の広い表示に変わったら、引き出していたメニューは閉じる（開いたままだと表の画面を触れない）。
+    effect(move || {
+        if is_wide() {
+            open.set(false);
+        }
+    });
     let back = BackSwipe {
         target: signal(None),
         drag: signal(None),
@@ -2178,7 +2190,7 @@ fn nav_bar(
     action_label: &'static str,
     on_action: Callback<()>,
 ) -> Element {
-    let drawer = if back_label.is_empty() && !is_wide() {
+    let drawer = if back_label.is_empty() {
         use_context::<Drawer>()
     } else {
         None
@@ -2187,7 +2199,8 @@ fn nav_bar(
         SystemNavBar(
             title: title.to_owned(),
             back: back_label.to_owned(),
-            menu: drawer.is_some(),
+            // iPad の広い表示では横のメニューが出しっぱなしなので「☰」は出さない。
+            menu: computed(move || drawer.is_some() && !is_wide()),
             action: action_label.to_owned(),
             on_press: move |which: String| match which.as_str() {
                 "back" => on_back.call(),

@@ -41,6 +41,8 @@ private final class TraitWatcher: UIView {
     var onLayout: ((Bool, CGFloat) -> Void)?
     private var activeObserver: NSObjectProtocol?
     private var rotateObserver: NSObjectProtocol?
+    /// ウィンドウの大きさの変化（Stage Manager や分割表示で幅を変えたとき）。
+    private var geometryObservation: NSKeyValueObservation?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -78,6 +80,14 @@ private final class TraitWatcher: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        geometryObservation = nil
+        if #available(iOS 16.0, *), let scene = window?.windowScene {
+            // 回したときだけでなく、ウィンドウの幅を変えたときにも測り直す
+            // （この部品自身は大きさ 0 なので、自分の並べ直しでは気づけない）。
+            geometryObservation = scene.observe(\.effectiveGeometry, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.notify() }
+            }
+        }
         if window != nil { notify() }
     }
 

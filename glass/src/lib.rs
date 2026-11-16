@@ -376,7 +376,7 @@ pub fn native_nav_bar(
 pub fn nav_bar(
     title: String,
     back: String,
-    menu: bool,
+    menu: Signal<bool>,
     action: String,
     on_press: Callback<String>,
     style: Style,
