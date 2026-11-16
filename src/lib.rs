@@ -72,6 +72,30 @@ fn is_dark() -> bool {
     DARK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// iPad の広い表示か（全画面か広めの分割）。横のメニューを出しっぱなしにし、下のタブは出さない。
+/// 変わったら `app` が画面を作り直す。
+static WIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn is_wide() -> bool {
+    WIDE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 画面（ウィンドウ）の幅。回すと変わる。
+#[derive(Clone, Copy)]
+struct WindowWidth(RwSignal<f32>);
+
+/// 表の画面（横のメニューを除いた部分）の幅。iPad で 2 列に並べるかを決めるのに使う。
+pub(crate) fn pane_width() -> ReadSignal<f32> {
+    let width = use_context::<WindowWidth>().map(|w| w.0);
+    computed(move || {
+        let w = width.map_or(0.0, |w| w.get());
+        if is_wide() { w - DRAWER_WIDTH } else { w }
+    })
+}
+
+/// 2 列に並べるのに要る、表の画面の幅。
+pub(crate) const TWO_COLUMN_WIDTH: f32 = 760.0;
+
 /// 明るい表示の色を渡すと、今の表示（明るい・暗い）に合う色を返す。
 /// 対応のない色（機能ごとのアイコンの色など）は、どちらでもそのまま使う。
 fn hex(light: u32) -> Color {
@@ -126,6 +150,9 @@ fn app() -> Element {
     // 明るい・暗いが分かってから画面を作る（起動直後に白く光らないように）。
     // iPhone の設定が切り替わったら、新しい色で画面を作り直す。
     let dark = signal(None::<bool>);
+    let wide = signal(None::<bool>);
+    let width = signal(0.0_f32);
+    provide_context(WindowWidth(width));
     render! {
         View(
             style: css!(flex_grow: 1.0, display: Display::Flex, flex_direction: FlexDirection::Column)
@@ -137,11 +164,17 @@ fn app() -> Element {
                     DARK.store(value, std::sync::atomic::Ordering::Relaxed);
                     dark.set(Some(value));
                 }
+            }, on_layout: move |(value, w): (bool, f32)| {
+                width.set(w);
+                if wide.get_untracked() != Some(value) {
+                    WIDE.store(value, std::sync::atomic::Ordering::Relaxed);
+                    wide.set(Some(value));
+                }
             })
             ForEach(
-                each: move || dark.get().into_iter().collect::<Vec<_>>(),
-                key: |d: &bool| *d,
-                children: move |_: ReadSignal<bool>| render! { Root },
+                each: move || dark.get().zip(wide.get()).into_iter().collect::<Vec<_>>(),
+                key: |d: &(bool, bool)| *d,
+                children: move |_: ReadSignal<(bool, bool)>| render! { Root },
             )
         }
     }
@@ -679,6 +712,24 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
             SideMenu(token: token, tenant: tenant, area: area, page: page, open: open)
             View(
                 style: computed(move || {
+                    // iPad の広い表示：横のメニューの右に並べて置く（引いて動かさない）。
+                    if is_wide() {
+                        let safe_top = insets.get().top as f32;
+                        return css!(
+                            position: PositionKind::Absolute,
+                            top: px(-safe_top),
+                            padding_top: px(safe_top),
+                            bottom: px(0),
+                            left: px(DRAWER_WIDTH),
+                            right: px(0),
+                            display: Display::Flex,
+                            flex_direction: FlexDirection::Column,
+                            background_color: hex(SYSTEM_BACKGROUND),
+                            overflow: Overflow::Hidden,
+                        )
+                        .border_left(hairline())
+                        .z_index(5);
+                    }
                     let x = offset.get();
                     let progress = (x / DRAWER_WIDTH).clamp(0.0, 1.0);
                     let shadow = progress * 0.22;
@@ -725,6 +776,9 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                 }),
                 // 画面のどこからでも、左から右へ引けばメニューが出る（開いているときは右から左で閉じる）。
                 on_capture_touchstart: move |e: TouchEvent| {
+                    if is_wide() {
+                        return;
+                    }
                     let (x, y) = (e.detail.x as f32, e.detail.y as f32);
                     start.set(Some((x, y, offset.get_untracked())));
                 },
@@ -798,7 +852,10 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                 Show(when: move || page.get() == Page::Agent) {
                     AgentScreen(token: token, tenant: tenant, chat: chat)
                 }
-                TabBar(area: area, page: page)
+                // iPad の広い表示では、横のメニューで機能を選ぶので下のタブは出さない。
+                Show(when: move || !is_wide()) {
+                    TabBar(area: area, page: page)
+                }
                 // 開いている間は表の画面を触れないようにし、タップで閉じる。
                 Show(when: move || open.get()) {
                     View(
@@ -951,6 +1008,36 @@ fn drawer_items(
 
     let sections = computed(move || {
         let selected_area = area.get();
+        // iPad の広い表示：分野ごとの見出しの下に機能を並べ、押せばその画面を開く（下のタブの代わり）。
+        if is_wide() {
+            let current = page.get();
+            let mut list: Vec<serde_json::Value> = MENU
+                .iter()
+                .enumerate()
+                .map(|(a, (name, items))| {
+                    let rows: Vec<serde_json::Value> = items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| {
+                            json!({
+                                "key": format!("feature:{a}:{i}"),
+                                "title": f.label,
+                                "symbol": feature_symbol(f.label),
+                                "accessory": if a == selected_area && current == Page::Feature(i) { "check" } else { "none" },
+                            })
+                        })
+                        .collect();
+                    json!({ "title": name, "rows": rows })
+                })
+                .collect();
+            list.push(json!({ "title": "", "rows": [{
+                "key": "agent",
+                "title": "Field Agent",
+                "symbol": "sparkles",
+                "accessory": if current == Page::Agent { "check" } else { "none" },
+            }] }));
+            return serde_json::Value::Array(list).to_string();
+        }
         let areas: Vec<serde_json::Value> = MENU
             .iter()
             .enumerate()
@@ -1096,6 +1183,15 @@ fn drawer_items(
                 on_select: move |key: String| {
                     if let Some(index) = key.strip_prefix("area:").and_then(|i| i.parse().ok()) {
                         choose_area(index, area, page, open);
+                    } else if let Some((a, i)) = key
+                        .strip_prefix("feature:")
+                        .and_then(|rest| rest.split_once(':'))
+                        .and_then(|(a, i)| Some((a.parse::<usize>().ok()?, i.parse::<usize>().ok()?)))
+                    {
+                        area.set(a);
+                        page.set(Page::Feature(i));
+                    } else if key == "agent" {
+                        page.set(Page::Agent);
                     }
                 },
                 style: css!(flex_grow: 1.0).flex_basis(px(0)).min_height(px(0)),
@@ -2082,7 +2178,7 @@ fn nav_bar(
     action_label: &'static str,
     on_action: Callback<()>,
 ) -> Element {
-    let drawer = if back_label.is_empty() {
+    let drawer = if back_label.is_empty() && !is_wide() {
         use_context::<Drawer>()
     } else {
         None
@@ -2121,7 +2217,7 @@ fn nav_bar(
     let has_back = !back_label.is_empty();
     let has_action = !action_label.is_empty();
     // 戻る先が無い画面では、左上に裏のメニューを開く「☰」を出す。
-    let drawer = if has_back {
+    let drawer = if has_back || is_wide() {
         None
     } else {
         use_context::<Drawer>()

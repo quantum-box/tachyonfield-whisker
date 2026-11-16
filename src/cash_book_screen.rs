@@ -898,6 +898,8 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
     let previous_manual =
         computed(move || ledger.day.with(|d| d.as_ref().is_some_and(|d| d.previous_balance_manual)));
     let receipts = crate::cash_book_receipts_ui::start(ledger);
+    // iPad で広いときは、左に残高と収入、右に支出を並べる。
+    let split = two_columns();
 
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
@@ -932,6 +934,8 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
                 )
             }
 
+            View(style: columns_style(split)) {
+            View(style: column_style(split)) {
             SectionHeader(title: computed(|| "残高".to_owned()))
             View(style: group_style()) {
                 // ① は打ち直せる。打ち直した日は、前の日に合わせない。
@@ -1002,7 +1006,9 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
             }
 
             crate::cash_book_receipts_ui::SalesPanel(receipts: receipts)
+            }
 
+            View(style: column_style(split)) {
             SectionHeader(title: computed(|| "支出".to_owned()))
             crate::cash_book_receipts_ui::PurchasePanel(receipts: receipts)
             ForEach(
@@ -1034,6 +1040,8 @@ fn day_sheet(ledger: Ledger, status: Signal<String>) -> Element {
             }
             Show(when: move || ledger.day.with(|d| d.as_ref().is_some_and(|d| d.expenses.is_empty())) && confirmed.get()) {
                 Notice(message: "支出はありません")
+            }
+            }
             }
 
             View(style: css!(height: px(24)))
@@ -1284,7 +1292,7 @@ pub(crate) fn text_row(label: &'static str, text: RwSignal<String>, editable: bo
             )
             .border_bottom(hairline()),
         ) {
-            Text(value: label, style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), width: px(64)))
+            Text(value: label, style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), width: px(96), flex_shrink: 0.0))
             Input(
                 text: text,
                 placeholder: "未入力",
@@ -1376,6 +1384,34 @@ pub(crate) fn button(label: &'static str, on_tap: Callback<()>) -> Element {
             )
         }
     }
+}
+
+/// iPad で広く、2 列に並べるか（回すと変わる）。
+pub(crate) fn two_columns() -> ReadSignal<bool> {
+    let pane = crate::pane_width();
+    computed(move || pane.get() >= crate::TWO_COLUMN_WIDTH)
+}
+
+/// 2 列のときは横に、そうでなければ縦に並べる入れ物。
+pub(crate) fn columns_style(split: ReadSignal<bool>) -> ReadSignal<Css> {
+    computed(move || {
+        if split.get() {
+            css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::FlexStart, padding: (px(0), px(8)))
+        } else {
+            css!(display: Display::Flex, flex_direction: FlexDirection::Column)
+        }
+    })
+}
+
+/// 2 列のときの 1 列（同じ幅で分ける）。
+pub(crate) fn column_style(split: ReadSignal<bool>) -> ReadSignal<Css> {
+    computed(move || {
+        if split.get() {
+            css!(display: Display::Flex, flex_direction: FlexDirection::Column, flex_grow: 1.0).flex_basis(px(0)).min_width(px(0))
+        } else {
+            css!(display: Display::Flex, flex_direction: FlexDirection::Column)
+        }
+    })
 }
 
 #[cfg(test)]

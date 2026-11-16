@@ -1,4 +1,5 @@
 // 証憑の原本（写真・PDF）を画面の中に出す（Web 版の StoredDocumentPreview と同じ）。
+// 写真は枠の中に全体が収まるように縮めて出す（拡大して見るときはピンチ）。
 //
 // Rust から受け取るもの：
 // - "url" … 原本の URL（https のときだけ読む。短い時間だけ使える署名付きのリンク）
@@ -70,7 +71,7 @@ public final class FieldDocumentPreviewView: WhiskerUI<UIView> {
         let type = (mime?.hasPrefix("image/") ?? false) ? mime! : "image/jpeg"
         let html = """
         <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-        <style>html,body{margin:0;background:transparent;}img{display:block;width:100%;height:auto;}</style></head>
+        <style>html,body{margin:0;height:100%;background:transparent;}img{display:block;width:100%;height:100%;object-fit:contain;}</style></head>
         <body><img src="data:\(type);base64,\(data.base64EncodedString())"></body></html>
         """
         webView.loadHTMLString(html, baseURL: nil)
