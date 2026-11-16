@@ -115,6 +115,9 @@ pub(crate) fn pane_width() -> ReadSignal<f32> {
     })
 }
 
+/// これより狭い画面（iPad mini の縦など）では、横のメニューを最初は閉じておく。
+const SIDEBAR_OPEN_WIDTH: f32 = 900.0;
+
 /// 2 列に並べるのに要る、表の画面の幅。
 pub(crate) const TWO_COLUMN_WIDTH: f32 = 760.0;
 
@@ -177,6 +180,8 @@ fn app() -> Element {
     WIDE.with(|w| w.set(Some(wide_now)));
     let hidden = signal(false);
     SIDEBAR_HIDDEN.with(|h| h.set(Some(hidden)));
+    // 前に測ったとき、狭かったか（横のメニューを最初から閉じておく幅か）。
+    let narrow_before = signal(None::<bool>);
     let width = signal(0.0_f32);
     provide_context(WindowWidth(width));
     render! {
@@ -192,6 +197,13 @@ fn app() -> Element {
                 }
             }, on_layout: move |(value, w): (bool, f32)| {
                 width.set(w);
+                // iPad mini の縦のような狭い画面では、横のメニューを最初は閉じておく（メールアプリと同じ）。
+                // 回して広さが変わったときだけ合わせ直し、それ以外は自分で開け閉めしたままにする。
+                let narrow = w < SIDEBAR_OPEN_WIDTH;
+                if narrow_before.get_untracked() != Some(narrow) {
+                    narrow_before.set(Some(narrow));
+                    hidden.set(narrow);
+                }
                 if wide.get_untracked() != Some(value) {
                     wide_now.set(value);
                     wide.set(Some(value));
