@@ -7,15 +7,28 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
+use whisker::css::{
+    Animation, AnimationDirection, AnimationFillMode, AnimationIterationCount, Css, Keyframes,
+    Number, Percentage,
+};
 use whisker::runtime::view::observe_layout;
 use whisker::{ElementHandle, ScrollViewHandle};
 
 use super::*;
+use crate::cash_book_screen::{sleep, spawn_in};
 
 /// Agent の印（✦）の色。Apple Intelligence の紫寄りの色。
 const PURPLE: u32 = 0x8E5CF7;
+/// 何も届かないまま、これだけ待ったら「時間がかかっています」と経過時間を出す。
+const LONG_WAIT: Duration = Duration::from_secs(15);
+/// 何も届かないまま、これだけ待ったら止まったものとして待つのをやめる。
+/// 通信の読み取りは 150 秒で切れるので、ふつうはその前に失敗として届く。
+const STALL_AFTER: Duration = Duration::from_secs(300);
+/// 待ち時間を数え直す間隔。
+const TICK: Duration = Duration::from_secs(1);
 use api::AgentEvent;
 
 /// 会話の 1 行の種類。
@@ -25,8 +38,10 @@ enum Role {
     Assistant,
     /// Agent が使った操作。
     Tool(ToolState),
-    /// 失敗や中止の知らせ。
+    /// 中止などの知らせ。
     Notice,
+    /// 失敗の知らせ。最後の失敗には「再試行」を出す。
+    Error,
     /// 返事が終わったあと、その回の操作をまとめた 1 行（押すと開く）。
     Summary,
 }
@@ -52,6 +67,13 @@ pub struct ChatMessage {
     folded: bool,
 }
 
+/// 失敗した頼みを、もう一度送るための控え。
+#[derive(Clone)]
+struct Retry {
+    typed: String,
+    picked: Vec<field_glass::PickedFile>,
+}
+
 /// 会話の中身。ホームが 1 つ持ち、Agent 画面に渡す。
 #[derive(Clone, Copy)]
 pub struct AgentChat {
@@ -69,6 +91,12 @@ pub struct AgentChat {
     pending: RwSignal<Vec<field_glass::PickedFile>>,
     /// 今流れている返事を止める旗。
     cancel: RwSignal<Option<Arc<AtomicBool>>>,
+    /// 最後の失敗の知らせ（行の ID）と、送り直す頼み。
+    retry: RwSignal<Option<(usize, Retry)>>,
+    /// 最後に Agent から何か届いた（または送った）時刻。
+    last_event: RwSignal<Instant>,
+    /// 返事を待っている間、1 秒ごとに進める今の時刻。
+    now: RwSignal<Instant>,
     /// 返事を受ける仕事の持ち主（ホーム）。画面の一部（案内やタブ）が消えても止まらないように。
     owner: Option<whisker::Owner>,
 }
@@ -85,6 +113,9 @@ impl AgentChat {
             files: signal(Vec::new()),
             pending: signal(Vec::new()),
             cancel: signal(None),
+            retry: signal(None),
+            last_event: signal(Instant::now()),
+            now: signal(Instant::now()),
             owner: whisker::Owner::current(),
         }
     }
@@ -183,6 +214,29 @@ impl AgentChat {
         });
     }
 
+    /// 失敗を知らせ、再試行できるよう頼みを控えておく。
+    fn fail(&self, message: String, again: Retry) {
+        let id = self.push(Role::Error, message, String::new());
+        self.retry.set(Some((id, again)));
+    }
+
+    /// 何も届かないまま長く経ったら、待つのをやめて失敗として知らせる。
+    fn stall(&self, again: Retry) {
+        if let Some(flag) = self.cancel.get_untracked() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        self.cancel.set(None);
+        if self.sending.get_untracked() {
+            self.sending.set(false);
+            self.settle_tools();
+            self.fold_turn();
+            self.fail(
+                "Field Agent から応答がないため、待つのをやめました".into(),
+                again,
+            );
+        }
+    }
+
     fn stop(&self) {
         if let Some(flag) = self.cancel.get_untracked() {
             flag.store(true, Ordering::Relaxed);
@@ -261,14 +315,16 @@ pub fn agent_screen(
         }
     };
 
-    let send = move || {
-        let typed = draft.get_untracked().trim().to_owned();
-        let picked = chat.pending.get_untracked();
-        if (typed.is_empty() && picked.is_empty()) || sending.get_untracked() {
+    let submit = move |typed: String, picked: Vec<field_glass::PickedFile>| {
+        if sending.get_untracked() {
             return;
         }
         let Some(current) = tenant.get_untracked() else {
             return;
+        };
+        let again = Retry {
+            typed: typed.clone(),
+            picked: picked.clone(),
         };
         // 文なしでファイルだけ送ったときは、中身の要点を聞く。
         // 「保存しないで」とは書かない。請求書や領収書は証憑OCR に上げないと Agent が読めないため。
@@ -277,8 +333,7 @@ pub fn agent_screen(
         } else {
             typed.clone()
         };
-        draft.set(String::new());
-        chat.pending.set(Vec::new());
+        chat.retry.set(None);
         chat.turn.set(chat.turn.get_untracked() + 1);
         let mut shown = typed;
         for file in &picked {
@@ -291,6 +346,27 @@ pub fn agent_screen(
         sending.set(true);
         let cancel = Arc::new(AtomicBool::new(false));
         chat.cancel.set(Some(cancel.clone()));
+        let started = Instant::now();
+        chat.last_event.set(started);
+        chat.now.set(started);
+
+        // 待ち時間を数える。何も届かないまま長く経ったら、止まったものとして知らせる。
+        let turn = chat.turn.get_untracked();
+        let waiting = again.clone();
+        spawn_in(chat.owner, async move {
+            loop {
+                sleep(TICK).await;
+                if !sending.get_untracked() || chat.turn.get_untracked() != turn {
+                    return;
+                }
+                let now = Instant::now();
+                chat.now.set(now);
+                if now.saturating_duration_since(chat.last_event.get_untracked()) >= STALL_AFTER {
+                    chat.stall(waiting);
+                    return;
+                }
+            }
+        });
 
         let run = async move {
             // 会話がまだなければ作る（期限切れのトークンはここで取り直す）。
@@ -314,7 +390,8 @@ pub fn agent_screen(
                         Err(message) => {
                             if !cancel.load(Ordering::Relaxed) {
                                 sending.set(false);
-                                chat.push(Role::Notice, message, String::new());
+                                chat.cancel.set(None);
+                                chat.fail(message, again);
                             }
                             return;
                         }
@@ -390,6 +467,7 @@ pub fn agent_screen(
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
+                chat.last_event.set(Instant::now());
                 match event {
                     AgentEvent::Text { kind, text } => {
                         let id = match &paragraph {
@@ -436,7 +514,8 @@ pub fn agent_screen(
                         }
                     }
                     AgentEvent::Failed(message) => {
-                        chat.push(Role::Notice, message, String::new());
+                        paragraph = None;
+                        chat.fail(message, again.clone());
                     }
                     AgentEvent::Renewed(access) => token.set(Some(access)),
                     AgentEvent::Attached(added) => chat.files.update(|f| f.extend(added)),
@@ -449,10 +528,34 @@ pub fn agent_screen(
                 sending.set(false);
             }
         };
-        match chat.owner {
-            Some(owner) => owner.with(|| spawn_local(run)),
-            None => spawn_local(run),
+        spawn_in(chat.owner, run);
+    };
+
+    let send = move || {
+        let typed = draft.get_untracked().trim().to_owned();
+        let picked = chat.pending.get_untracked();
+        if (typed.is_empty() && picked.is_empty())
+            || sending.get_untracked()
+            || tenant.with_untracked(Option::is_none)
+        {
+            return;
         }
+        draft.set(String::new());
+        chat.pending.set(Vec::new());
+        submit(typed, picked);
+    };
+
+    // 失敗した頼みを送り直す。上げ終わって消えた添付は、会話に残っているので付け直さない。
+    let retry = move || {
+        let Some((_, again)) = chat.retry.get_untracked() else {
+            return;
+        };
+        let picked = again
+            .picked
+            .into_iter()
+            .filter(|f| std::path::Path::new(&f.path).exists())
+            .collect();
+        submit(again.typed, picked);
     };
 
     // 考え中の印：送ったあと、まだ文が流れ始めていない（または操作が終わって次を待つ）間。
@@ -461,9 +564,19 @@ pub fn agent_screen(
             && messages.with(|list| {
                 !matches!(
                     list.last().map(|m| m.role),
-                    Some(Role::Assistant) | Some(Role::Tool(ToolState::Running))
+                    Some(Role::Assistant)
+                        | Some(Role::Tool(ToolState::Running))
+                        | Some(Role::Error)
                 )
             })
+    });
+
+    // 最後に何か届いてからの待ち時間（秒）。
+    let waited = computed(move || {
+        chat.now
+            .get()
+            .saturating_duration_since(chat.last_event.get())
+            .as_secs()
     });
 
     let insets = safe_area_insets();
@@ -496,6 +609,7 @@ pub fn agent_screen(
                 on_action: move |_| {
                     chat.stop();
                     messages.set(Vec::new());
+                    chat.retry.set(None);
                     chat.expanded.set(Vec::new());
                     chat.session.set(None);
                     chat.files.set(Vec::new());
@@ -547,6 +661,20 @@ pub fn agent_screen(
                                     ToolLine(text: text, state: computed(move || m.get().role))
                                 },
                                 Role::Notice => render! { NoticeLine(text: text) },
+                                Role::Error => {
+                                    let id = m.get_untracked().id;
+                                    let pending = chat.retry;
+                                    render! {
+                                        ErrorLine(
+                                            text: text,
+                                            can_retry: computed(move || {
+                                                !sending.get()
+                                                    && pending.with(|r| r.as_ref().is_some_and(|(n, _)| *n == id))
+                                            }),
+                                            on_retry: move |_| retry(),
+                                        )
+                                    }
+                                }
                                 Role::Summary => {
                                     let turn = m.get_untracked().turn;
                                     let expanded = chat.expanded;
@@ -570,20 +698,7 @@ pub fn agent_screen(
                         },
                     )
                     Show(when: move || thinking.get()) {
-                        View(
-                            style: css!(
-                                display: Display::Flex,
-                                flex_direction: FlexDirection::Row,
-                                align_items: AlignItems::Center,
-                                gap: px(6),
-                            ),
-                        ) {
-                            Text(value: "✦", style: computed(move || css!(color: hex(PURPLE), font_size: px(15))))
-                            Text(
-                                value: "考えています…",
-                                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15))),
-                            )
-                        }
+                        ThinkingIndicator(waited: waited)
                     }
                 }
             }
@@ -908,9 +1023,175 @@ fn renew(send: &impl Fn(AgentEvent)) -> Option<String> {
 }
 
 /// Agent の返事：吹き出しなしで、画面の幅いっぱいの文。見出し・太字・箇条書き・表などを飾る。
+/// 考え中の印と入れ替わるときに、ふわっと出す。
 #[component]
 fn assistant_text(text: Signal<String>) -> Element {
-    render! { crate::markdown::Markdown(text: text) }
+    render! {
+        View(style: fade_in()) {
+            crate::markdown::Markdown(text: text)
+        }
+    }
+}
+
+/// 考え中の印：紫の ✦ がゆっくり明滅しながら少し揺れ、「考えています」の後ろの点が順に灯る。
+/// 動きを減らす設定では、揺れ・大きさの変化・点の動きを止め、✦ の明るさだけをゆっくり変える。
+/// 何も届かないまま長く待っているときは、経過時間を下に添える。
+#[component]
+fn thinking_indicator(waited: Signal<u64>) -> Element {
+    let long = computed(move || waited.get() >= LONG_WAIT.as_secs());
+    let label = computed(move || waiting_label(waited.get()));
+    let text_style = move || css!(color: hex(SECONDARY_LABEL), font_size: px(15));
+    render! {
+        View(
+            style: fade_in()
+                .display(Display::Flex)
+                .flex_direction(FlexDirection::Column)
+                .gap(px(2)),
+        ) {
+            View(
+                style: css!(
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    gap: px(6),
+                    height: px(22),
+                ),
+            ) {
+                // 揺れ（外）と明滅（内）を分け、同じ transform を取り合わないようにする。
+                View(style: computed(move || sparkle_box().animation(sparkle_sway(reduce_motion())))) {
+                    View(style: computed(move || sparkle_box().animation(sparkle_pulse(reduce_motion())))) {
+                        Text(value: "✦", style: computed(move || css!(color: hex(PURPLE), font_size: px(15))))
+                    }
+                }
+                View(
+                    style: css!(
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                    ),
+                ) {
+                    Text(value: "考えています", style: computed(text_style))
+                    View(style: computed(move || dot_style(0, reduce_motion()))) {
+                        Text(value: ".", style: computed(text_style))
+                    }
+                    View(style: computed(move || dot_style(1, reduce_motion()))) {
+                        Text(value: ".", style: computed(text_style))
+                    }
+                    View(style: computed(move || dot_style(2, reduce_motion()))) {
+                        Text(value: ".", style: computed(text_style))
+                    }
+                }
+            }
+            Show(when: move || long.get()) {
+                Text(
+                    value: label,
+                    style: computed(move || css!(
+                        color: hex(SECONDARY_LABEL),
+                        font_size: px(13),
+                        padding_left: px(24),
+                    )),
+                )
+            }
+        }
+    }
+}
+
+/// 長く待っているときの添え書き。「時間がかかっています（1 分 05 秒）・■ で止められます」。
+fn waiting_label(secs: u64) -> String {
+    let elapsed = if secs < 60 {
+        format!("{secs} 秒")
+    } else {
+        format!("{} 分 {:02} 秒", secs / 60, secs % 60)
+    };
+    format!("時間がかかっています（{elapsed}）・■ で止められます")
+}
+
+/// ✦ を回したり大きさを変えたりしても、周りが動かないよう大きさを決めた箱。
+fn sparkle_box() -> Css {
+    css!(
+        width: px(18),
+        height: px(18),
+        display: Display::Flex,
+        align_items: AlignItems::Center,
+        justify_content: JustifyContent::Center,
+    )
+}
+
+/// 繰り返し、行って戻る動き。
+fn breathing(frames: Keyframes, duration_ms: f32) -> Animation {
+    Animation::new(frames)
+        .duration(ms(duration_ms))
+        .timing(EasingFunction::EaseInOut)
+        .iteration_count(AnimationIterationCount::Infinite)
+        .direction(AnimationDirection::Alternate)
+}
+
+fn keyframes(from: Css, to: Css) -> Keyframes {
+    Keyframes::builder()
+        .from(from)
+        .to(to)
+        .build()
+        .expect("考え中の印の動きが組めません")
+}
+
+/// ✦ をゆっくり左右に少し傾ける。動きを減らす設定では傾けない。
+fn sparkle_sway(reduce: bool) -> Animation {
+    if reduce {
+        return Animation::new("none");
+    }
+    let tilt = |angle: f32| Css::new().transform(TransformFn::Rotate(deg(angle).into()));
+    breathing(keyframes(tilt(-12.0), tilt(12.0)), 1800.0)
+}
+
+/// ✦ をゆっくり明るく・暗くする。動きを減らす設定では大きさを変えず、さらにゆっくり。
+fn sparkle_pulse(reduce: bool) -> Animation {
+    if reduce {
+        return breathing(
+            keyframes(Css::new().opacity(0.55), Css::new().opacity(1.0)),
+            1600.0,
+        );
+    }
+    let frame = |opacity: f32, scale: f32| {
+        Css::new().opacity(opacity).transform(TransformFn::Scale(
+            Number::new(scale).into(),
+            Number::new(scale).into(),
+        ))
+    };
+    breathing(keyframes(frame(0.5, 0.86), frame(1.0, 1.0)), 900.0)
+}
+
+/// 「考えています」の後ろの点を、左から順に灯す。動きを減らす設定では点を灯したままにする。
+fn dot_style(index: usize, reduce: bool) -> Css {
+    if reduce {
+        return Css::new().opacity(1.0);
+    }
+    let dim = || Css::new().opacity(0.2);
+    let frames = Keyframes::builder()
+        .from(dim())
+        .at(Percentage::new(35.0), Css::new().opacity(1.0))
+        .at(Percentage::new(70.0), dim())
+        .to(dim())
+        .build()
+        .expect("考え中の点の動きが組めません");
+    Css::new().opacity(0.2).animation(
+        Animation::new(frames)
+            .duration(ms(1400))
+            .delay(ms(index as f32 * 200.0))
+            .timing(EasingFunction::EaseInOut)
+            .iteration_count(AnimationIterationCount::Infinite)
+            .fill_mode(AnimationFillMode::Both),
+    )
+}
+
+/// 出てくるときに、短くふわっと濃くする（位置は動かさないので、動きを減らす設定でもそのまま）。
+fn fade_in() -> Css {
+    let frames = keyframes(Css::new().opacity(0.0), Css::new().opacity(1.0));
+    Css::new().animation(
+        Animation::new(frames)
+            .duration(ms(220))
+            .timing(EasingFunction::EaseOut)
+            .fill_mode(AnimationFillMode::Both),
+    )
 }
 
 /// Agent が使った操作：小さな 1 行。動いている間は「…」、終わったら ✓、失敗は !。
@@ -969,6 +1250,60 @@ fn notice_line(text: Signal<String>) -> Element {
     }
 }
 
+/// 失敗の知らせ：赤い「!」と灰色の文。最後の失敗には「再試行」の札を出す。
+#[component]
+fn error_line(text: Signal<String>, can_retry: Signal<bool>, on_retry: Callback<()>) -> Element {
+    render! {
+        View(
+            style: css!(
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                gap: px(8),
+            ),
+        ) {
+            View(
+                style: css!(
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::FlexStart,
+                    gap: px(6),
+                ),
+            ) {
+                Text(
+                    value: "!",
+                    style: computed(move || css!(
+                        color: hex(RED),
+                        font_size: px(13),
+                        font_weight: FontWeight::Bold,
+                        width: px(14),
+                    )),
+                )
+                Text(
+                    value: text,
+                    style: computed(move || css!(flex_shrink: 1.0, color: hex(SECONDARY_LABEL), font_size: px(13))),
+                )
+            }
+            Show(when: move || can_retry.get()) {
+                View(
+                    style: computed(move || css!(
+                        margin_left: px(20),
+                        padding: (px(6), px(14)),
+                        border_radius: px(15),
+                        background_color: hex(FILL),
+                    )),
+                    on_tap: move |_| on_retry.run(()),
+                ) {
+                    Text(
+                        value: "再試行",
+                        style: computed(move || css!(color: hex(TINT), font_size: px(14), font_weight: FontWeight::Numeric(600))),
+                    )
+                }
+            }
+        }
+    }
+}
+
 /// たたんだ操作のまとめ行：「✓ 3 件の操作 ›」。押すと中身の行が開く（⌄）。
 #[component]
 fn summary_line(text: Signal<String>, open: Signal<bool>, on_tap: Callback<()>) -> Element {
@@ -998,5 +1333,37 @@ fn summary_line(text: Signal<String>, open: Signal<bool>, on_tap: Callback<()>) 
                 style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13))),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn waiting_label_shows_seconds_then_minutes() {
+        assert_eq!(
+            waiting_label(15),
+            "時間がかかっています（15 秒）・■ で止められます"
+        );
+        assert_eq!(
+            waiting_label(65),
+            "時間がかかっています（1 分 05 秒）・■ で止められます"
+        );
+    }
+
+    #[test]
+    fn reduce_motion_stops_tilt_scale_and_dots() {
+        assert!(sparkle_sway(false).keyframes.is_some());
+        assert!(sparkle_sway(true).keyframes.is_none());
+        assert_ne!(sparkle_pulse(true).name, sparkle_pulse(false).name);
+        assert!(dot_style(1, false).to_string().contains("animation"));
+        assert!(!dot_style(1, true).to_string().contains("animation"));
+    }
+
+    #[test]
+    fn stall_waits_longer_than_the_read_timeout() {
+        assert!(LONG_WAIT < STALL_AFTER);
+        assert!(STALL_AFTER > Duration::from_secs(150));
     }
 }

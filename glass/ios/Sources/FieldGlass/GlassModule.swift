@@ -77,6 +77,12 @@ public final class GlassModule: Module {
             }
             View("field-glass:KeyboardDismiss", FieldKeyboardDismissView.self) {}
             View("field-glass:KeyboardKeep", FieldKeyboardKeepView.self) {}
+            View("field-glass:RefreshControl", FieldRefreshControlView.self) {
+                Prop("refreshing") { (view: FieldRefreshControlView, value: WhiskerValue) in
+                    view.setRefreshing(value.asBool ?? (value.asString == "true"))
+                }
+                Events("refresh")
+            }
             View("field-glass:AttachButton", FieldAttachButtonView.self) {
                 Events("pick")
             }
@@ -101,7 +107,7 @@ public final class GlassModule: Module {
                 }
             }
             View("field-glass:AppearanceObserver", FieldAppearanceObserverView.self) {
-                Events("change", "layout")
+                Events("change", "layout", "motion")
             }
             View("field-glass:NavBar", FieldNavBarView.self) {
                 Prop("title") { (view: FieldNavBarView, value: WhiskerValue) in
