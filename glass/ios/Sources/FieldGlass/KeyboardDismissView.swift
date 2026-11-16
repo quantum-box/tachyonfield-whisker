@@ -50,6 +50,8 @@ public final class FieldKeyboardKeepView: WhiskerUI<UIView> {
 /// ウィンドウごとに 1 つ。タップとドラッグを見張るだけで、触れたものは他の部品にもそのまま届ける。
 final class KeyboardDismisser: NSObject, UIGestureRecognizerDelegate {
     static let keepAreas = NSHashTable<UIView>.weakObjects()
+    /// どこかのウィンドウでキーボードが出ているか（`RefreshControl` が引っ張って更新を止めるのに使う）。
+    private(set) static var keyboardVisible = false
     private static let installed = NSMapTable<UIWindow, KeyboardDismisser>.weakToStrongObjects()
 
     /// 下へこれだけ動かして離したら閉じる（pt）。
@@ -85,12 +87,14 @@ final class KeyboardDismisser: NSObject, UIGestureRecognizerDelegate {
         observers.append(center.addObserver(
             forName: UIResponder.keyboardWillShowNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            KeyboardDismisser.keyboardVisible = true
             self?.keyboardShown = true
             self?.makeScrollViewsInteractive()
         })
         observers.append(center.addObserver(
             forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main
         ) { [weak self] _ in
+            KeyboardDismisser.keyboardVisible = false
             self?.keyboardShown = false
         })
     }
