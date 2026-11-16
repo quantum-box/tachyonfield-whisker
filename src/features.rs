@@ -219,6 +219,19 @@ pub const RECEIPTS: Feature = Feature {
     detail_path: None,
 };
 
+/// 戦略「思想と行動」。MVV から行動までのツリーを見る専用の画面。
+pub const STRATEGY: Feature = Feature {
+    label: "思想と行動",
+    path: "screen:strategy",
+    list_key: "",
+    title: &[],
+    subtitle: &[],
+    trailing: None,
+    avatar: false,
+    color: INDIGO,
+    detail_path: None,
+};
+
 impl Feature {
     /// 一覧ではなく専用の画面を開く機能か。
     pub fn is_screen(&self) -> bool {
@@ -235,6 +248,7 @@ pub const MENU: &[(&str, &[Feature])] = &[
     ("請求・経費", &[INVOICES, EXPENSES]),
     ("現金", &[CASH_BOOK, REGISTER_COUNT]),
     ("証憑・仕訳", &[RECEIPTS]),
+    ("戦略", &[STRATEGY]),
 ];
 
 #[derive(Clone, Copy)]

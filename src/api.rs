@@ -331,6 +331,73 @@ pub fn fetch_record(token: &str, tenant: &Tenant, path: &str) -> Result<Value, S
         .map_err(|e| format!("応答を読めません: {e}"))
 }
 
+/// 戦略の読み込みの待ち時間。Web 版と同じく、外（Linear・Library）からの補完を含めて 55 秒まで待つ。
+const STRATEGY_TIMEOUT: Duration = Duration::from_secs(55);
+/// 戦略を続きのページまで読む上限。
+const STRATEGY_MAX_PAGES: usize = 20;
+
+/// 戦略「思想と行動」を読む。`nextCursor` があれば続きも読み、版が同じページをまとめる。
+/// `department_id` が空でなければ、その事業部（組織）の範囲に絞る。
+pub fn strategy_workspace(
+    token: &str,
+    tenant: &Tenant,
+    department_id: &str,
+) -> Result<crate::strategy::Workspace, String> {
+    let mut workspace: Option<crate::strategy::Workspace> = None;
+    let mut cursor: Option<String> = None;
+    for _ in 0..STRATEGY_MAX_PAGES {
+        let mut path = String::from("/v1/erp/strategy/workspace?limit=100");
+        if !department_id.is_empty() {
+            path.push_str(&format!("&departmentId={}", encode_query(department_id)));
+        }
+        if let Some(cursor) = &cursor {
+            path.push_str(&format!("&cursor={}", encode_query(cursor)));
+        }
+        let body: Value = field_request("GET", &path, token, &tenant.id, &tenant.platform_id)
+            .timeout(STRATEGY_TIMEOUT)
+            .call()
+            .map_err(describe_error)?
+            .into_json()
+            .map_err(|e| format!("応答を読めません: {e}"))?;
+        let page = crate::strategy::Workspace::from_value(&body);
+        let next = page.next_cursor.clone().filter(|_| !page.complete);
+        workspace = Some(match workspace {
+            Some(previous) => previous.merge(page),
+            None => page,
+        });
+        match next {
+            Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
+            _ => break,
+        }
+    }
+    workspace.ok_or_else(|| "応答を読めません".into())
+}
+
+/// 戦略の 1 項目を読み直す（一覧には入っていない本文などを詳細で出すため）。
+pub fn strategy_node(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
+    let path = format!("/v1/erp/strategy/nodes/{}", encode_query(id));
+    field_request("GET", &path, token, &tenant.id, &tenant.platform_id)
+        .timeout(STRATEGY_TIMEOUT)
+        .call()
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
+/// 戦略の進み具合（目標ごとの行動の数）。読めなくてもツリーは出せるので、呼ぶ側で無視してよい。
+pub fn strategy_progress(token: &str, tenant: &Tenant, department_id: &str) -> Result<Value, String> {
+    let mut path = String::from("/v1/erp/strategy/progress");
+    if !department_id.is_empty() {
+        path.push_str(&format!("?departmentId={}", encode_query(department_id)));
+    }
+    field_request("GET", &path, token, &tenant.id, &tenant.platform_id)
+        .timeout(STRATEGY_TIMEOUT)
+        .call()
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
 /// 現金出納帳の帳簿設定。まだ設定の API が無い環境（404）では `None`。
 pub fn cash_book_settings(token: &str, tenant: &Tenant) -> Result<Option<Value>, String> {
     match field_request(

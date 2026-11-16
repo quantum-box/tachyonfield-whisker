@@ -27,6 +27,8 @@ mod register_count_import;
 mod register_count_screen;
 mod register_count_settings;
 mod storage;
+mod strategy;
+mod strategy_screen;
 
 use agent::AgentScreen;
 use api::Tenant;
@@ -885,6 +887,11 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                                 receipt_ocr_screen::ReceiptOcrScreen(token: token, tenant: tenant)
                             };
                         }
+                        if feature.path == features::STRATEGY.path {
+                            return render! {
+                                strategy_screen::StrategyScreen(token: token, tenant: tenant)
+                            };
+                        }
                         if feature.is_screen() {
                             return render! {
                                 cash_book_screen::CashBookScreen(token: token, tenant: tenant)
@@ -988,6 +995,7 @@ fn feature_symbol(label: &str) -> &'static str {
         "現金出納帳" => "banknote.fill",
         "証憑OCR" => "doc.text.viewfinder",
         "レジ締め" => "dollarsign.arrow.circlepath",
+        "思想と行動" => "point.3.connected.trianglepath.dotted",
         _ => "square.fill",
     }
 }
@@ -1003,6 +1011,7 @@ fn area_symbol(name: &str) -> &'static str {
         "請求・経費" => "yensign.circle",
         "現金" => "banknote",
         "証憑・仕訳" => "doc.text.magnifyingglass",
+        "戦略" => "scope",
         _ => "square.grid.2x2",
     }
 }
