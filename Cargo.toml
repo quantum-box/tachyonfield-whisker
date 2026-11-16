@@ -44,3 +44,6 @@ whisker-safe-area = "0.14.6"
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 security-framework = "3"
+
+[dev-dependencies]
+whisker-engine = "0.18.0"

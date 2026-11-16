@@ -325,18 +325,19 @@ pub fn markdown(text: Signal<String>) -> Element {
         ) {
             ForEach(
                 each: move || {
+                    let dark = is_dark();
                     parse(&text.get())
                         .into_iter()
                         .enumerate()
                         .map(|(i, b)| {
                             let mut h = DefaultHasher::new();
                             b.hash(&mut h);
-                            (i, h.finish(), b)
+                            (i, h.finish(), dark, b)
                         })
                         .collect::<Vec<_>>()
                 },
-                key: |b: &(usize, u64, Block)| (b.0, b.1),
-                children: move |b: ReadSignal<(usize, u64, Block)>| block_view(&b.get_untracked().2),
+                key: |b: &(usize, u64, bool, Block)| (b.0, b.1, b.2),
+                children: move |b: ReadSignal<(usize, u64, bool, Block)>| block_view(&b.get_untracked().3),
             )
         }
     }

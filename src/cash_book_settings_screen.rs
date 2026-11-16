@@ -192,7 +192,7 @@ pub fn cash_book_settings_screen(
 
     render! {
         View(
-            style: screen_style().background_color(hex(SYSTEM_BACKGROUND)),
+            style: computed(move || screen_style().background_color(hex(SYSTEM_BACKGROUND))),
         ) {
             NavBar(
                 title: "帳簿設定",
@@ -219,11 +219,11 @@ pub fn cash_book_settings_screen(
                     Show(when: move || !editor.message.with(String::is_empty)) {
                         Text(
                             value: computed(move || editor.message.get()),
-                            style: css!(
+                            style: computed(move || css!(
                                 color: hex(SECONDARY_LABEL),
                                 font_size: px(14),
                                 padding: (px(12), px(32), px(0), px(32)),
-                            ),
+                            )),
                         )
                     }
                     Show(when: move || editor.settings.with(Option::is_some) && !editing.get()) {
@@ -249,7 +249,7 @@ fn book_list(editor: Editor) -> Element {
             Hint(text: "店舗マスタから店舗を選び、店舗・レジごとの帳簿を設定できます。")
             Show(when: move || !has_stores.get() && editor.load_error.with(String::is_empty) && editor.settings.with(Option::is_some)) {
                 Hint(text: "帳簿を追加するには、先に店舗マスタで店舗を登録してください。登録後、この画面で店舗・レジの帳簿を追加できます。")
-                View(style: group_style()) {
+                View(style: computed(move || group_style())) {
                     TextRow(label: "店舗名", text: store_name, editable: true, on_text: |_| {})
                     FieldRow(
                         label: computed(move || if creating.get() { "登録しています…".to_owned() } else { "店舗を登録する".to_owned() }),
@@ -278,7 +278,7 @@ fn book_list(editor: Editor) -> Element {
                 }
             }
             SectionHeader(title: computed(move || format!("帳簿（{}件）", editor.books().len())))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 Show(when: move || editor.books().is_empty()) {
                     FieldRow(
                         label: computed(|| "店舗・レジ別の帳簿はまだありません。".to_owned()),
@@ -354,7 +354,7 @@ fn book_editor(editor: Editor) -> Element {
                     let name = signal(text("name"));
                     let register = signal(text("registerName"));
                     render! {
-                        View(style: group_style()) {
+                        View(style: computed(move || group_style())) {
                             TextRow(label: "帳簿名", text: name, editable: true, on_text: move |t: String| editor.edit(false, |d| d["name"] = json!(t)))
                             Show(when: move || new) {
                                 Choice(
@@ -390,7 +390,7 @@ fn book_editor(editor: Editor) -> Element {
                     editor.edit(true, |d| d["template"] = rules::configure_legacy(&d["template"]));
                 })
             }
-            View(style: group_style().margin_top(px(12))) {
+            View(style: computed(move || group_style().margin_top(px(12)))) {
                 Choice(
                     label: computed(|| "帳票".to_owned()),
                     options: computed(|| vec![("cash".to_owned(), "現金出納帳".to_owned()), ("register".to_owned(), "レジ管理表".to_owned())]),
@@ -407,7 +407,7 @@ fn book_editor(editor: Editor) -> Element {
             Show(when: move || !editor.message.with(String::is_empty)) {
                 Text(
                     value: computed(move || editor.message.get()),
-                    style: css!(color: hex(RED), font_size: px(14), padding: (px(16), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(RED), font_size: px(14), padding: (px(16), px(32), px(0), px(32)))),
                 )
             }
             Button(label: "保存", on_tap: move |_| editor.save())
@@ -438,7 +438,7 @@ fn template_editor(editor: Editor) -> Element {
                 children: move |_v: ReadSignal<u64>| {
                     let name = signal(editor.draft.with_untracked(|d| d["template"]["name"].as_str().unwrap_or("").to_owned()));
                     render! {
-                        View(style: group_style().margin_top(px(16))) {
+                        View(style: computed(move || group_style().margin_top(px(16)))) {
                             TextRow(label: "テンプレート名", text: name, editable: true, on_text: move |t: String| editor.edit(false, |d| d["template"]["name"] = json!(t)))
                         }
                     }
@@ -462,7 +462,7 @@ fn template_editor(editor: Editor) -> Element {
                 if rows_of(&template()["incomes"]).len() >= 40 { return; }
                 editor.edit(true, |d| push(&mut d["template"]["incomes"], json!({ "key": rules::new_key(), "label": "新しい売上項目", "deduct": false })));
             })
-            View(style: group_style().margin_top(px(12))) {
+            View(style: computed(move || group_style().margin_top(px(12)))) {
                 Choice(
                     label: computed(|| "未分類の売上".to_owned()),
                     options: income_options,
@@ -487,7 +487,7 @@ fn template_editor(editor: Editor) -> Element {
                 if rows_of(&template()["expenses"]).len() >= 40 { return; }
                 editor.edit(true, |d| push(&mut d["template"]["expenses"], json!({ "key": rules::new_key(), "label": "新しい支出項目", "slots": 3 })));
             })
-            View(style: group_style().margin_top(px(12))) {
+            View(style: computed(move || group_style().margin_top(px(12)))) {
                 Choice(
                     label: computed(|| "未分類の支出".to_owned()),
                     options: expense_options,
@@ -552,7 +552,7 @@ fn income_row(editor: Editor, index: usize) -> Element {
         computed(move || editor.draft.with(|d| rules::can_remove_income(&d["template"], &key)))
     };
     render! {
-        View(style: group_style().margin_bottom(px(8))) {
+        View(style: computed(move || group_style().margin_bottom(px(8)))) {
             TextRow(label: "売上項目", text: label, editable: true, on_text: move |t: String| editor.edit(false, |d| d["template"]["incomes"][index]["label"] = json!(t)))
             FieldRow(
                 label: computed(move || if deduct.get() { "控除（合計から引く）".to_owned() } else { "控除しない".to_owned() }),
@@ -581,7 +581,7 @@ fn expense_row(editor: Editor, index: usize) -> Element {
     let slots = row["slots"].as_f64().map(|s| format!("{s}")).unwrap_or_default();
     let removable = computed(move || editor.draft.with(|d| rules::can_remove_expense(&d["template"], &key)));
     render! {
-        View(style: group_style().margin_bottom(px(8))) {
+        View(style: computed(move || group_style().margin_bottom(px(8)))) {
             TextRow(label: "支出項目", text: label, editable: true, on_text: move |t: String| editor.edit(false, |d| d["template"]["expenses"][index]["label"] = json!(t)))
             NumberRow(label: "印刷行数", initial: slots, decimal: false, on_value: move |v: Option<f64>| editor.edit(false, |d| {
                 d["template"]["expenses"][index]["slots"] = v.map_or(Value::Null, |v| json!(v as i64));
@@ -602,7 +602,7 @@ fn rule_list(editor: Editor, expense: bool, options: Signal<Vec<(String, String)
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
             Text(
                 value: if expense { "支出" } else { "売上" },
-                style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(6), px(32))),
+                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(6), px(32)))),
             )
             ForEach(
                 each: move || {
@@ -651,7 +651,7 @@ fn rule_row(editor: Editor, expense: bool, index: usize, options: Signal<Vec<(St
             .collect::<Vec<_>>()
     });
     render! {
-        View(style: group_style().margin_bottom(px(8))) {
+        View(style: computed(move || group_style().margin_bottom(px(8)))) {
             Show(when: move || expense) {
                 Choice(
                     label: computed(|| "照合する所".to_owned()),
@@ -736,7 +736,7 @@ fn product_link(editor: Editor, options: Signal<Vec<(String, String)>>) -> Eleme
         })
     });
     render! {
-        View(style: group_style()) {
+        View(style: computed(move || group_style())) {
             TextRow(label: "商品名", text: query, editable: true, on_text: |_| {})
             FieldRow(
                 label: computed(move || if searching.get() { "探しています…".to_owned() } else { "商品を検索".to_owned() }),
@@ -851,7 +851,7 @@ pub(crate) fn print_editor(editor: Editor, base: &'static str) -> Element {
                     let footer = signal(get("footer"));
                     let size = editor.draft.with_untracked(|d| d[base]["print"]["fontSize"].as_f64().map(|s| format!("{s}")).unwrap_or_default());
                     render! {
-                        View(style: group_style()) {
+                        View(style: computed(move || group_style())) {
                             TextRow(label: "表題", text: title, editable: true, on_text: set("title"))
                             TextRow(label: "会社名", text: company, editable: true, on_text: set("companyName"))
                             TextRow(label: "確認欄", text: approval, editable: true, on_text: set("approvalLabel"))
@@ -863,7 +863,7 @@ pub(crate) fn print_editor(editor: Editor, base: &'static str) -> Element {
                     }
                 },
             )
-            View(style: group_style().margin_top(px(12))) {
+            View(style: computed(move || group_style().margin_top(px(12)))) {
                 Choice(
                     label: computed(|| "配置".to_owned()),
                     options: options(&[("sideBySide", "収入と残高を左右に配置"), ("stacked", "収入と残高を上下に配置")]),
@@ -886,7 +886,7 @@ pub(crate) fn print_editor(editor: Editor, base: &'static str) -> Element {
 
             SectionHeader(title: computed(|| "AIで印刷形式の案を作る".to_owned()))
             Hint(text: "JPEG・PNG・PDF、3 MiBまで。金額や個人情報を含まない見本を使ってください。")
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 TextRow(label: "AIへの依頼", text: instructions, editable: true, on_text: |_| {})
                 View(
                     style: css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, gap: px(12), padding: (px(8), px(16))),
@@ -913,7 +913,7 @@ pub(crate) fn print_editor(editor: Editor, base: &'static str) -> Element {
                     )
                     Text(
                         value: computed(move || reference.with(|r| r.as_ref().map_or_else(|| "参考帳票の写真・PDF（なくても可）".to_owned(), |(name, _, _)| name.clone()))),
-                        style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_shrink: 1.0),
+                        style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_shrink: 1.0)),
                     )
                 }
                 Show(when: move || reference.with(|r| r.as_ref().is_some_and(|(_, _, pdf)| *pdf))) {
@@ -938,7 +938,7 @@ pub(crate) fn print_editor(editor: Editor, base: &'static str) -> Element {
                 Hint(text: "AIの案です。採用後に「保存」で会社の設定に反映します。")
                 Text(
                     value: computed(move || suggestion.with(|s| s.as_ref().map(describe_print).unwrap_or_default())),
-                    style: css!(color: hex(LABEL), font_size: px(15), padding: (px(4), px(32))),
+                    style: computed(move || css!(color: hex(LABEL), font_size: px(15), padding: (px(4), px(32)))),
                 )
                 Button(label: "この案を採用", on_tap: move |_| {
                     if let Some(value) = suggestion.get_untracked() {
@@ -1022,16 +1022,16 @@ pub(crate) fn number_row(label: &'static str, initial: String, decimal: bool, on
     let input = InputRef::new();
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 padding_left: px(16),
                 min_height: px(48),
             )
-            .border_bottom(hairline()),
+            .border_bottom(hairline())),
         ) {
-            Text(value: label, style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_grow: 1.0))
+            Text(value: label, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), flex_grow: 1.0)))
             Input(
                 text: text,
                 placeholder: "0",
@@ -1039,7 +1039,7 @@ pub(crate) fn number_row(label: &'static str, initial: String, decimal: bool, on
                 input_ref: input,
                 on_focus: move |_| remember_focus(input),
                 on_input: move |value: String| on_value.run(value.trim().parse::<f64>().ok()),
-                style: css!(
+                style: computed(move || css!(
                     width: px(100),
                     height: px(48),
                     font_size: px(17),
@@ -1047,7 +1047,7 @@ pub(crate) fn number_row(label: &'static str, initial: String, decimal: bool, on
                     text_align: TextAlign::Right,
                     color: hex(LABEL),
                     background_color: Color::rgba(0, 0, 0, 0.0),
-                ),
+                )),
             )
         }
     }
@@ -1059,7 +1059,7 @@ pub(crate) fn remove_row(on_tap: Callback<()>) -> Element {
     render! {
         Text(
             value: "削除",
-            style: css!(color: hex(RED), font_size: px(15), padding: (px(12), px(16))),
+            style: computed(move || css!(color: hex(RED), font_size: px(15), padding: (px(12), px(16)))),
             on_tap: move |_| on_tap.call(),
         )
     }
@@ -1071,7 +1071,7 @@ pub(crate) fn hint(text: &'static str) -> Element {
     render! {
         Text(
             value: text,
-            style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(4), px(32))),
+            style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(4), px(32)))),
         )
     }
 }

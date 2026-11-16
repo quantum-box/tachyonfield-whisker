@@ -533,18 +533,18 @@ pub(crate) fn sales_panel(receipts: Receipts) -> Element {
     render! {
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
             Show(when: move || !confirmed.get()) {
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     View(
                         style: css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, gap: px(12), padding: (px(10), px(16))),
                     ) {
                         AttachButton(on_pick: move |file: field_glass::PickedFile| r.scan(file), style: css!(width: px(36), height: px(36)))
                         Text(
                             value: computed(move || if r.scanning.get() { "締めレシートを読み取り中…".to_owned() } else { "締めレシートを撮って入れる".to_owned() }),
-                            style: css!(color: hex(TINT), font_size: px(17)),
+                            style: computed(move || css!(color: hex(TINT), font_size: px(17))),
                         )
                     }
                     Show(when: move || r.with_book() && !new_sales.with(Vec::is_empty)) {
-                        Text(value: "この店舗・レジの締めレシートを選択", style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16), px(0), px(16))))
+                        Text(value: "この店舗・レジの締めレシートを選択", style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16), px(0), px(16)))))
                         ForEach(
                             each: move || new_sales.get(),
                             key: |s: &Receipt| s.id.clone(),
@@ -573,7 +573,7 @@ pub(crate) fn sales_panel(receipts: Receipts) -> Element {
             Show(when: move || imported_count.get() > 0 && new_sales.with(Vec::is_empty)) {
                 Text(
                     value: computed(move || format!("締めレシート {} 枚を収入に入れてあります。", imported_count.get())),
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))),
                 )
             }
             Show(when: move || !not_closing.with(Vec::is_empty)) {
@@ -582,7 +582,7 @@ pub(crate) fn sales_panel(receipts: Receipts) -> Element {
                         "売上の種類で読み込んだレシートのうち {} はレジの締めレシートに見えないので、収入に入れていません。仕入のレシートなら、証憑OCRで種類を仕入に変えてください。",
                         not_closing.get().join("、"),
                     )),
-                    style: css!(color: hex(ORANGE), font_size: px(13), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(ORANGE), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))),
                 )
             }
             Show(when: move || r.last_income.with(Option::is_some)) {
@@ -602,7 +602,7 @@ pub(crate) fn sales_panel(receipts: Receipts) -> Element {
                             lines.join("\n")
                         })
                     }),
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))),
                 )
             }
         }
@@ -642,7 +642,7 @@ pub(crate) fn purchase_panel(receipts: Receipts) -> Element {
             }
             Show(when: move || !confirmed.get() && !candidates.with(Vec::is_empty)) {
                 SectionHeader(title: computed(|| "この日の仕入のレシート（まだ入れていないもの）".to_owned()))
-                View(style: group_style()) {
+                View(style: computed(move || group_style())) {
                     ForEach(
                         each: move || candidates.get(),
                         key: |x: &Receipt| x.id.clone(),
@@ -666,11 +666,11 @@ pub(crate) fn purchase_panel(receipts: Receipts) -> Element {
                         },
                     )
                     View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, padding: (px(12), px(16)))) {
-                        Text(value: "全部選ぶ", style: css!(color: hex(TINT), font_size: px(15)), on_tap: move |_| {
+                        Text(value: "全部選ぶ", style: computed(move || css!(color: hex(TINT), font_size: px(15))), on_tap: move |_| {
                             let flip: HashSet<String> = r.candidates().into_iter().filter(|x| r.with_book() || x.is_cashless()).map(|x| x.id).collect();
                             r.toggled.set(flip);
                         })
-                        Text(value: "全部外す", style: css!(color: hex(TINT), font_size: px(15)), on_tap: move |_| {
+                        Text(value: "全部外す", style: computed(move || css!(color: hex(TINT), font_size: px(15))), on_tap: move |_| {
                             let flip: HashSet<String> = r.candidates().into_iter().filter(|x| !(r.with_book() || x.is_cashless())).map(|x| x.id).collect();
                             r.toggled.set(flip);
                         })
@@ -680,20 +680,20 @@ pub(crate) fn purchase_panel(receipts: Receipts) -> Element {
             Show(when: move || !used_notes.with(Vec::is_empty)) {
                 Text(
                     value: computed(move || format!("この日に買ったレシートのうち {} は、ほかの日の出納帳に入れてあるので出していません。", used_notes.get().join("、"))),
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))),
                 )
             }
             Show(when: move || r.reading_count() > 0) {
                 Text(
                     value: computed(move || format!("読み取り中のレシートが {} 枚あります。読み取りが終わってから入れられます（日付を開き直すと確認し直します）。", r.reading_count())),
-                    style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32))),
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(32), px(0), px(32)))),
                 )
             }
             Show(when: move || r.truncated.get()) {
                 Hint(text: "この前後にアップロードしたレシートが多く、一部が出ていないかもしれません。足りない分は行を追加して入れてください。")
             }
             Show(when: move || !confirmed.get()) {
-                View(style: group_style().margin_top(px(8))) {
+                View(style: computed(move || group_style().margin_top(px(8)))) {
                     FieldRow(
                         label: computed(move || if r.other_open.get() { "ほかの日のレシートを閉じる".to_owned() } else { "ほかの日に買ったレシートを入れる（立て替えを精算した日など）".to_owned() }),
                         value: computed(String::new),
@@ -706,7 +706,7 @@ pub(crate) fn purchase_panel(receipts: Receipts) -> Element {
                     Show(when: move || r.other_open.get()) {
                         Text(
                             value: computed(move || format!("買った日はレシートの日付のまま残し、この日（{}）の支出として入れます。前後 31 日にアップロードしたレシートから選べます。", date_label.get())),
-                            style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16))),
+                            style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(8), px(16)))),
                         )
                         Show(when: move || r.other_loading.get()) { Hint(text: "レシートを確認中…") }
                         Show(when: move || !r.other_error.with(String::is_empty)) { Hint(text: "ほかの日のレシートを読み込めませんでした。") }
@@ -823,7 +823,7 @@ pub(crate) fn receipt_fix(ledger: Ledger, row_id: String, receipt_id: String) ->
         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
             Text(
                 value: "金額・支払先・買った日はレシートの読み取りを使っています。違うときは「レシートを直す」で元のレシートを直してください。",
-                style: css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(4), px(16))),
+                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(13), padding: (px(4), px(16)))),
             )
             FieldRow(
                 label: computed(|| "レシートを直す".to_owned()),
@@ -841,7 +841,7 @@ pub(crate) fn receipt_fix(ledger: Ledger, row_id: String, receipt_id: String) ->
                 )
             }
             Show(when: move || !error.with(String::is_empty)) {
-                Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(4), px(16))))
+                Text(value: computed(move || error.get()), style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(4), px(16)))))
             }
         }
     }
@@ -861,7 +861,7 @@ pub(crate) fn receipt_message(receipts: Receipts) -> Element {
         Show(when: move || !receipts.message.with(String::is_empty)) {
             Text(
                 value: computed(move || receipts.message.get()),
-                style: css!(color: hex(TINT), font_size: px(14), padding: (px(8), px(32), px(0), px(32))),
+                style: computed(move || css!(color: hex(TINT), font_size: px(14), padding: (px(8), px(32), px(0), px(32)))),
                 on_tap: move |_| receipts.message.set(String::new()),
             )
         }

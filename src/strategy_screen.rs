@@ -177,13 +177,16 @@ pub(crate) fn strategy_screen(
                             Notice(message: "この範囲に MVV・目標・行動はありません。")
                         }
                         Show(when: move || !rows.with(Vec::is_empty)) {
-                            View(style: group_style()) {
+                            View(style: computed(move || group_style())) {
                                 ForEach(
-                                    each: move || rows.get(),
-                                    // 開閉で ▼ の向きが変わるので、開閉も鍵に入れて描き直す。
-                                    key: |row: &Row| format!("{}:{}:{}", row.id, row.open, row.depth),
-                                    children: move |row: ReadSignal<Row>| {
-                                        let row = row.get_untracked();
+                                    each: move || {
+                                        let dark = is_dark();
+                                        rows.get().into_iter().map(|row| (row, dark)).collect::<Vec<_>>()
+                                    },
+                                    // 行内の固定色を再計算する。選択・開閉状態は Tree に保持する。
+                                    key: |item: &(Row, bool)| format!("{}:{}:{}:{}", item.0.id, item.0.open, item.0.depth, item.1),
+                                    children: move |item: ReadSignal<(Row, bool)>| {
+                                        let row = item.get_untracked().0;
                                         let last = rows.with_untracked(|all| all.last().map(|r| r.id.clone()));
                                         let separator = last.as_deref() != Some(row.id.as_str());
                                         render! {
@@ -294,12 +297,12 @@ fn division_tabs(tree: Tree) -> Element {
                             ) {
                                 Show(when: move || color.is_some()) {
                                     View(
-                                        style: css!(
+                                        style: computed(move || css!(
                                             width: px(8),
                                             height: px(8),
                                             border_radius: px(4),
                                             background_color: Color::hex(color.unwrap_or_default()),
-                                        ),
+                                        )),
                                     )
                                 }
                                 Text(
@@ -358,7 +361,7 @@ fn legend(tree: Tree) -> Element {
                                 ),
                             ) {
                                 Show(when: move || index > 0) {
-                                    Text(value: "→", style: css!(color: hex(SECONDARY_LABEL), font_size: px(12)))
+                                    Text(value: "→", style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(12))))
                                 }
                                 LevelBadge(level: level)
                             }
@@ -375,12 +378,12 @@ fn legend(tree: Tree) -> Element {
             ) {
                 Text(
                     value: "すべて開く",
-                    style: css!(color: hex(TINT), font_size: px(14)),
+                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
                     on_tap: move |_| tree.collapsed.set(HashSet::new()),
                 )
                 Text(
                     value: "目標まで閉じる",
-                    style: css!(color: hex(TINT), font_size: px(14)),
+                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
                     on_tap: move |_| {
                         let set = tree.workspace.with_untracked(|ws| {
                             ws.as_ref().map(model::collapse_to_objectives).unwrap_or_default()
@@ -396,30 +399,19 @@ fn legend(tree: Tree) -> Element {
 /// 段の札（MVV・目標など）。段ごとの色で塗る。
 #[component]
 fn level_badge(level: &'static str) -> Element {
-    let (bg, fg, border) = model::level_colors(level, is_dark());
-    let style = {
-        let s = css!(
-            padding: (px(2), px(5)),
-            border_radius: px(4),
-            background_color: Color::hex(bg),
-            flex_shrink: 0.0,
-        );
-        match border {
-            Some(color) => s.border(
-                Border::new()
-                    .width(px(1))
-                    .color(Color::hex(color))
-                    .style(BorderStyle::Solid),
-            ),
-            None => s,
-        }
-    };
     render! {
-        View(style: style) {
+        View(style: computed(move || {
+            let (bg, _, border) = model::level_colors(level, is_dark());
+            let s = css!(padding: (px(2), px(5)), border_radius: px(4), background_color: Color::hex(bg), flex_shrink: 0.0);
+            match border {
+                Some(color) => s.border(Border::new().width(px(1)).color(Color::hex(color)).style(BorderStyle::Solid)),
+                None => s,
+            }
+        })) {
             Text(
                 value: level,
                 max_lines: 1u32,
-                style: css!(color: Color::hex(fg), font_size: px(11), font_weight: FontWeight::Bold),
+                style: computed(move || css!(color: Color::hex(model::level_colors(level, is_dark()).1), font_size: px(11), font_weight: FontWeight::Bold)),
             )
         }
     }
@@ -431,17 +423,17 @@ fn pill(label: String, background: u32, color: u32, round: bool) -> Element {
     let label = signal(label.clone());
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 padding: (px(2), px(if round { 8 } else { 5 })),
                 border_radius: px(if round { 999 } else { 4 }),
                 background_color: Color::hex(background),
                 flex_shrink: 0.0,
-            ),
+            )),
         ) {
             Text(
                 value: computed(move || label.get()),
                 max_lines: 1u32,
-                style: css!(color: Color::hex(color), font_size: px(11), font_weight: FontWeight::Numeric(600)),
+                style: computed(move || css!(color: Color::hex(color), font_size: px(11), font_weight: FontWeight::Numeric(600))),
             )
         }
     }
@@ -525,7 +517,7 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
 
     render! {
         View(
-            style: {
+            style: computed(move || {
                 let s = css!(
                     position: PositionKind::Relative,
                     display: Display::Flex,
@@ -540,7 +532,7 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
                     Some(color) => s.border_left(Border::new().width(px(4)).color(Color::hex(color)).style(BorderStyle::Solid)),
                     None => s,
                 }
-            },
+            }),
             on_tap: move |_| selected.set(Some(Value::String(id.clone()))),
         ) {
             // 親子をつなぐ縦の線。深さの数だけ、各段の ▼ の真ん中に引く。
@@ -551,14 +543,14 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
                     let i = i.get_untracked();
                     render! {
                         View(
-                            style: css!(
+                            style: computed(move || css!(
                                 position: PositionKind::Absolute,
                                 top: px(0),
                                 bottom: px(0),
                                 left: px(ROW_LEFT + TOGGLE / 2.0 + i as f32 * INDENT),
                                 width: px(1),
                                 background_color: hex(SEPARATOR),
-                            ),
+                            )),
                         )
                     }
                 },
@@ -581,7 +573,7 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
                 Show(when: move || has_children) {
                     Text(
                         value: if open { "▾" } else { "▸" },
-                        style: css!(color: hex(SECONDARY_LABEL), font_size: px(16)),
+                        style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(16))),
                     )
                 }
             }
@@ -620,12 +612,12 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
                 Text(
                     value: title.clone(),
                     max_lines: 3u32,
-                    style: css!(
+                    style: computed(move || css!(
                         color: hex(LABEL),
                         font_size: px(size),
                         font_weight: FontWeight::Numeric(weight),
                     )
-                    .text_overflow(TextOverflow::Ellipsis),
+                    .text_overflow(TextOverflow::Ellipsis)),
                 )
                 Show(when: move || has_links) {
                     View(
@@ -669,7 +661,7 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
                             Text(
                                 value: computed(move || owner.get()),
                                 max_lines: 1u32,
-                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(12)),
+                                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(12))),
                             )
                         }
                         ForEach(
@@ -683,7 +675,7 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
                         Show(when: move || has_counts) {
                             Text(
                                 value: computed(move || counts_text.get()),
-                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(12)),
+                                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(12))),
                             )
                         }
                     }
@@ -700,7 +692,7 @@ fn link_chip(label: String, tone: LinkTone) -> Element {
     let label = signal(label.clone());
     render! {
         View(
-            style: css!(
+            style: computed(move || css!(
                 display: Display::Flex,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
@@ -709,21 +701,21 @@ fn link_chip(label: String, tone: LinkTone) -> Element {
                 border_radius: px(4),
                 border: Border::new().width(px(0.5)).color(hex(SEPARATOR)).style(BorderStyle::Solid),
                 flex_shrink: 0.0,
-            ),
+            )),
         ) {
             View(
-                style: css!(
+                style: computed(move || css!(
                     padding: (px(0), px(3)),
                     border_radius: px(2),
                     background_color: Color::hex(color),
-                ),
+                )),
             ) {
                 Text(
                     value: mark,
-                    style: css!(color: Color::hex(0xFFFFFF), font_size: px(9), font_weight: FontWeight::Bold),
+                    style: computed(move || css!(color: Color::hex(0xFFFFFF), font_size: px(9), font_weight: FontWeight::Bold)),
                 )
             }
-            Text(value: computed(move || label.get()), max_lines: 1u32, style: css!(color: hex(LABEL), font_size: px(11)))
+            Text(value: computed(move || label.get()), max_lines: 1u32, style: computed(move || css!(color: hex(LABEL), font_size: px(11))))
         }
     }
 }
@@ -936,10 +928,10 @@ fn strategy_detail_body(
                     LevelBadge(level: level)
                     Text(
                         value: title.clone(),
-                        style: css!(color: hex(LABEL), font_size: px(22), font_weight: FontWeight::Numeric(700)),
+                        style: computed(move || css!(color: hex(LABEL), font_size: px(22), font_weight: FontWeight::Numeric(700))),
                     )
                     Show(when: move || show_full_title) {
-                        Text(value: full_title.clone(), style: css!(color: hex(SECONDARY_LABEL), font_size: px(14)))
+                        Text(value: full_title.clone(), style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(14))))
                     }
                 }
                 InfoGroup(rows: rows.clone(), inline: false)
@@ -957,10 +949,10 @@ fn strategy_detail_body(
                 }
                 Show(when: move || has_body) {
                     SectionHeader(title: computed(|| "本文".to_owned()))
-                    View(style: group_style()) {
+                    View(style: computed(move || group_style())) {
                         Text(
                             value: computed(move || body.get()),
-                            style: css!(color: hex(LABEL), font_size: px(15), padding: (px(12), px(16))),
+                            style: computed(move || css!(color: hex(LABEL), font_size: px(15), padding: (px(12), px(16)))),
                         )
                     }
                 }
@@ -979,7 +971,7 @@ fn related_group(
     let last = signal(items.last().map(|i| i.0.clone()));
     let items = signal(items.clone());
     render! {
-        View(style: group_style()) {
+        View(style: computed(move || group_style())) {
             ForEach(
                 each: move || items.get(),
                 key: |i: &(String, String, &'static str)| i.0.clone(),

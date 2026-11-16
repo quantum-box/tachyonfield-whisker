@@ -403,11 +403,11 @@ pub fn register_count_screen(token: RwSignal<Option<String>>, tenant: RwSignal<O
                         Show(when: move || options.with(Vec::is_empty) && books.with(|b| matches!(b, Some(Ok(_))))) {
                             Text(
                                 value: "レジ管理表を設定した店舗・レジがありません。右上の「帳簿設定」で帳簿を開き、「レジ管理表を設定する」を押してください。",
-                                style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), padding: (px(32), px(24)), text_align: TextAlign::Center),
+                                style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), padding: (px(32), px(24)), text_align: TextAlign::Center)),
                             )
                         }
                         Show(when: move || !options.with(Vec::is_empty)) {
-                            View(style: group_style().margin_top(px(16))) {
+                            View(style: computed(move || group_style().margin_top(px(16)))) {
                                 Choice(
                                     label: computed(|| "店舗・レジ".to_owned()),
                                     options: options,
@@ -512,7 +512,7 @@ fn register_sheet(sheet: Sheet) -> Element {
                     render! {
                         View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
                             SectionHeader(title: computed(|| "担当・天気".to_owned()))
-                            View(style: group_style()) {
+                            View(style: computed(move || group_style())) {
                                 TextRow(label: "担当（開始）", text: opening_staff, editable: !locked, on_text: move |t: String| sheet.update(false, move |d| d.opening_staff = t))
                                 TextRow(label: "担当（終了）", text: closing_staff, editable: !locked, on_text: move |t: String| sheet.update(false, move |d| d.closing_staff = t))
                                 Choice(
@@ -536,7 +536,7 @@ fn register_sheet(sheet: Sheet) -> Element {
                             View(style: columns_style(split)) {
                             View(style: column_style(split)) {
                             SectionHeader(title: computed(|| "開始時".to_owned()))
-                            View(style: group_style()) {
+                            View(style: computed(move || group_style())) {
                                 Show(when: move || !locked && (has_previous.get() || from_previous.get())) {
                                     FieldRow(
                                         label: computed(move || if has_previous.get() { "前日の終了時を引き継ぐ".to_owned() } else { "前日の終了時の記録なし".to_owned() }),
@@ -553,18 +553,18 @@ fn register_sheet(sheet: Sheet) -> Element {
                             }
                             View(style: column_style(split)) {
                             SectionHeader(title: computed(|| "終了時".to_owned()))
-                            View(style: group_style()) {
+                            View(style: computed(move || group_style())) {
                                 CountTable(sheet: sheet, closing: true, locked: locked)
                             }
                             }
                             }
                             SectionHeader(title: computed(|| "実績".to_owned()))
-                            View(style: group_style()) {
+                            View(style: computed(move || group_style())) {
                                 CountRow(label: computed(|| "客数".to_owned()), unit: "人", initial: customers, editable: !locked, on_value: move |v: Option<i64>| sheet.update(false, move |d| d.customer_count = v))
                                 ActualRows(sheet: sheet, locked: locked)
                             }
                             SectionHeader(title: computed(|| "メモ".to_owned()))
-                            View(style: group_style()) {
+                            View(style: computed(move || group_style())) {
                                 TextRow(label: "メモ", text: note, editable: !locked, on_text: move |t: String| sheet.update(false, move |d| d.note = t))
                             }
                         }
@@ -573,13 +573,13 @@ fn register_sheet(sheet: Sheet) -> Element {
             )
 
             SectionHeader(title: computed(|| "金額チェック".to_owned()))
-            View(style: group_style()) {
+            View(style: computed(move || group_style())) {
                 TotalRow(label: "終了時現金", amount: computed(move || check.get().0))
                 TotalRow(label: "開始時入金", amount: computed(move || check.get().1))
                 TotalRow(label: "差額（増えた現金）", amount: computed(move || check.get().2))
                 TotalRow(label: "入出金合計", amount: computed(move || check.get().3))
                 View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, padding: (px(14), px(16)))) {
-                    Text(value: "過不足", style: css!(color: hex(LABEL), font_size: px(17)))
+                    Text(value: "過不足", style: computed(move || css!(color: hex(LABEL), font_size: px(17))))
                     Text(
                         value: computed(move || {
                             let x = check.get().4;
@@ -717,12 +717,12 @@ pub(crate) fn count_row(label: Signal<String>, unit: &'static str, initial: Stri
     let input = InputRef::new();
     render! {
         View(
-            style: css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, padding_left: px(16), min_height: px(46))
-                .border_bottom(hairline()),
+            style: computed(move || css!(display: Display::Flex, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, padding_left: px(16), min_height: px(46))
+                .border_bottom(hairline())),
         ) {
-            Text(value: label, style: css!(color: hex(LABEL), font_size: px(16), flex_grow: 1.0, flex_shrink: 1.0))
+            Text(value: label, style: computed(move || css!(color: hex(LABEL), font_size: px(16), flex_grow: 1.0, flex_shrink: 1.0)))
             Show(when: move || invalid.get()) {
-                Text(value: "数字で", style: css!(color: hex(RED), font_size: px(13), margin_right: px(6)))
+                Text(value: "数字で", style: computed(move || css!(color: hex(RED), font_size: px(13), margin_right: px(6))))
             }
             Input(
                 text: text,
@@ -735,14 +735,14 @@ pub(crate) fn count_row(label: Signal<String>, unit: &'static str, initial: Stri
                     Ok(v) => { invalid.set(false); on_value.run(v); }
                     Err(()) => invalid.set(true),
                 },
-                style: css!(
+                style: computed(move || css!(
                     width: px(110), height: px(46), font_size: px(17), padding_right: px(8),
                     text_align: TextAlign::Right,
                     color: hex(if editable { LABEL } else { SECONDARY_LABEL }),
                     background_color: Color::rgba(0, 0, 0, 0.0),
-                ),
+                )),
             )
-            Text(value: unit, style: css!(color: hex(SECONDARY_LABEL), font_size: px(15), margin_right: px(16)))
+            Text(value: unit, style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(15), margin_right: px(16))))
         }
     }
 }

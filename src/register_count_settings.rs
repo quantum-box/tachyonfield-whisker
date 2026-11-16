@@ -64,7 +64,7 @@ pub(crate) fn register_editor(editor: Editor) -> Element {
             }
             Show(when: move || configured.get()) {
                 SectionHeader(title: computed(|| "天気の自動取得地域".to_owned()))
-                View(style: group_style()) {
+                View(style: computed(move || group_style())) {
                     TextRow(label: "地域を絞り込む", text: area_filter, editable: true, on_text: |_| {})
                     Choice(
                         label: computed(|| "取得地域".to_owned()),
@@ -98,7 +98,7 @@ pub(crate) fn register_editor(editor: Editor) -> Element {
                     if rows_of(&d["registerCount"]["rows"]).len() >= 30 { return; }
                     push(&mut d["registerCount"]["rows"], json!({ "key": rules::new_key(), "label": "", "effect": "add", "source": "items", "quantity": false }));
                 }))
-                View(style: group_style().margin_top(px(12))) {
+                View(style: computed(move || group_style().margin_top(px(12)))) {
                     Choice(
                         label: computed(|| "売上合計と内訳の差額を入れる項目".to_owned()),
                         options: remainder_rows,
@@ -122,7 +122,7 @@ pub(crate) fn register_editor(editor: Editor) -> Element {
                         let linked = rule["productId"].is_string();
                         let text = signal(rule["text"].as_str().unwrap_or("").to_owned());
                         render! {
-                            View(style: group_style().margin_bottom(px(8))) {
+                            View(style: computed(move || group_style().margin_bottom(px(8)))) {
                                 TextRow(label: if linked { "商品マスタ連携・伝票での別名" } else { "伝票での表記" }, text: text, editable: true, on_text: move |t: String| editor.edit(false, move |d| d["registerCount"]["rules"][i]["text"] = json!(t)))
                                 Choice(
                                     label: computed(|| "振り分け先".to_owned()),
@@ -161,7 +161,7 @@ fn register_row(editor: Editor, index: usize) -> Element {
     let is_remainder = computed(move || editor.draft.with(|d| d["registerCount"]["rows"][index]["key"] == d["registerCount"]["remainder"]));
     let payment = computed(move || matches!(source.get().as_str(), "credit" | "codePayment"));
     render! {
-        View(style: group_style().margin_bottom(px(8))) {
+        View(style: computed(move || group_style().margin_bottom(px(8)))) {
             TextRow(label: "項目名", text: label, editable: true, on_text: move |t: String| editor.edit(false, move |d| d["registerCount"]["rows"][index]["label"] = json!(t)))
             Choice(
                 label: computed(|| "入力元".to_owned()),
@@ -240,11 +240,11 @@ fn register_product_link(editor: Editor, targets: Signal<Vec<(String, String)>>)
         })
     });
     render! {
-        View(style: group_style().margin_top(px(12))) {
+        View(style: computed(move || group_style().margin_top(px(12)))) {
             TextRow(label: "商品名・SKU", text: query, editable: true, on_text: |_| {})
             FieldRow(label: computed(|| "商品マスタを検索".to_owned()), value: computed(move || format!("{}件", products.with(Vec::len))), on_tap: move |_| search())
             Show(when: move || !error.with(String::is_empty)) {
-                Text(value: computed(move || error.get()), style: css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16))))
+                Text(value: computed(move || error.get()), style: computed(move || css!(color: hex(RED), font_size: px(13), padding: (px(6), px(16)))))
             }
             Show(when: move || !products.with(Vec::is_empty)) {
                 Choice(label: computed(|| "商品".to_owned()), options: options, selected: computed(move || chosen.get()), on_pick: move |id: String| chosen.set(id))

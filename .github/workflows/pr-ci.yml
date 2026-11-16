@@ -1,0 +1,55 @@
+name: Pull Request CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-simulator-build:
+    name: Rust tests and iOS Simulator build
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Rust tests
+        run: cargo test --locked
+
+      - name: Install Whisker CLI
+        run: cargo install whisker-cli --version 0.18.0 --locked
+
+      - name: Generate iOS project
+        run: cargo run --locked --bin whisker-config --features whisker-config -- ios
+
+      # Whisker's SPM code-generation plugin and macro use the exact Whisker
+      # version in glass/Package.swift; Xcode's trust prompts are not interactive in CI.
+      - name: Build unsigned iOS Simulator app
+        run: |
+          xcodebuild \
+            -project 'gen/ios/TACHYON Field.xcodeproj' \
+            -scheme 'TACHYON Field' \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            build
