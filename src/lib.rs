@@ -33,7 +33,9 @@ mod strategy_screen;
 use agent::AgentScreen;
 use api::Tenant;
 use features::{Feature, MENU};
-use field_glass::{AppearanceObserver, AttachButton, Backdrop, Glass, KeyboardObserver};
+use field_glass::{
+    AppearanceObserver, AttachButton, Backdrop, Glass, KeyboardObserver, RefreshControl,
+};
 #[cfg(target_os = "ios")]
 use field_glass::{
     MenuList as SystemMenuList, NavBar as SystemNavBar, RecordList as SystemRecordList,

@@ -33,6 +33,7 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_menu_list_schema::element_provider(),
             native_record_list_schema::element_provider(),
             native_keyboard_observer_schema::element_provider(),
+            native_refresh_control_schema::element_provider(),
             native_appearance_observer_schema::element_provider(),
             native_nav_bar_schema::element_provider(),
             native_sheet_schema::element_provider(),
@@ -275,6 +276,33 @@ pub fn keyboard_observer(on_change: Callback<f32>) -> Element {
 #[component]
 pub fn keyboard_observer(on_change: Callback<f32>) -> Element {
     let _ = on_change;
+    render! { View() }
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:RefreshControl", measurement = None)]
+pub fn native_refresh_control(refreshing: Signal<bool>, style: Style, on_refresh: ()) {}
+
+/// 見えない部品。置いた `ScrollView` に iOS 標準の「引っ張って更新」（UIRefreshControl）を付ける。
+/// `ScrollView` の中身の中に置く。iOS 以外は何もしない。
+///
+/// - `refreshing` … 更新中か。false になったらくるくるを止める
+/// - `on_refresh` … 最上部から引っ張って離したとき
+#[cfg(target_os = "ios")]
+#[component]
+pub fn refresh_control(refreshing: Signal<bool>, on_refresh: Callback<()>) -> Element {
+    use whisker::css::PositionKind;
+    NativeRefreshControl::builder()
+        .refreshing(refreshing)
+        .style(css!(position: PositionKind::Absolute, width: px(0), height: px(0)))
+        .on_refresh(move || on_refresh.run(()))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn refresh_control(refreshing: Signal<bool>, on_refresh: Callback<()>) -> Element {
+    let _ = (refreshing, on_refresh);
     render! { View() }
 }
 
