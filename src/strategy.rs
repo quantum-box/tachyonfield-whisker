@@ -176,6 +176,15 @@ impl Workspace {
         }
     }
 
+    /// 続けて読んだページの応答から 1 つにまとめる。ページが無ければ空。
+    pub fn from_pages(pages: &[Value]) -> Workspace {
+        let mut pages = pages.iter().map(Workspace::from_value);
+        let Some(first) = pages.next() else {
+            return Workspace::default();
+        };
+        pages.fold(first, Workspace::merge)
+    }
+
     /// 続きのページを足す。版が違えば（途中で変わった）新しいページだけにする（Web 版の mergeWorkspace）。
     pub fn merge(self, page: Workspace) -> Workspace {
         if self.version != page.version {
@@ -1172,6 +1181,21 @@ mod tests {
         assert_eq!(merged.organizations, first.organizations);
         let other = Workspace::from_value(&json!({"version": 4, "nodes": []}));
         assert!(first.merge(other).nodes.is_empty());
+    }
+
+    #[test]
+    fn from_pages_rebuilds_the_tree_from_remembered_pages() {
+        let pages = vec![
+            json!({"version": 3, "nodes": [{"id": "a", "kind": "objective", "title": "目標"}], "complete": false, "nextCursor": "c"}),
+            json!({"version": 3, "nodes": [{"id": "b", "kind": "action", "title": "行動"}], "complete": true}),
+        ];
+        let tree = Workspace::from_pages(&pages);
+        assert_eq!(
+            tree.nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        assert!(tree.complete);
+        assert_eq!(Workspace::from_pages(&[]), Workspace::default());
     }
 
     #[test]

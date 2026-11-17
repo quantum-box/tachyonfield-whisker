@@ -18,6 +18,15 @@ const ROW_LEFT: f32 = 10.0;
 /// ▼ のボタンの幅。
 const TOGGLE: f32 = 24.0;
 
+/// 端末に覚えておくときの名前。事業部のタブごとに分ける（会社ごとの分け方は cache が持つ）。
+fn workspace_cache_key(department: &str) -> String {
+    format!("{}?departmentId={department}", api::STRATEGY_WORKSPACE_PATH)
+}
+
+fn progress_cache_key(department: &str) -> String {
+    format!("{}?departmentId={department}", api::STRATEGY_PROGRESS_PATH)
+}
+
 #[derive(Clone, Copy)]
 struct Tree {
     token: RwSignal<Option<String>>,
@@ -30,6 +39,8 @@ struct Tree {
     counts: RwSignal<HashMap<String, Counts>>,
     collapsed: RwSignal<HashSet<String>>,
     loading: RwSignal<bool>,
+    /// 覚えておいたツリーを出したまま、裏で取り直している。
+    quiet: RwSignal<bool>,
     error: RwSignal<String>,
     generation: RwSignal<u64>,
 }
@@ -43,10 +54,13 @@ impl Tree {
     /// 読めなかったときは、今出しているツリーを残したままエラーを出す。
     fn refresh(self) {
         if !self.loading.get_untracked() {
+            self.quiet.set(false);
             self.fetch(true);
         }
     }
 
+    /// 前に読んだツリーがあれば、取り直しを待たずにすぐ出す（一覧・詳細と同じ）。
+    /// 裏で取り直して届いたら差し替える。読めなかったときは覚えておいた方を残す。
     fn fetch(self, keep_on_error: bool) {
         let Some(current) = self.tenant.get_untracked() else {
             return;
@@ -56,25 +70,40 @@ impl Tree {
         self.loading.set(true);
         self.error.set(String::new());
         let department = self.department.get_untracked();
+        let workspace_key = workspace_cache_key(&department);
+        let progress_key = progress_cache_key(&department);
+        let mut keep_on_error = keep_on_error;
+        let remembered = if keep_on_error {
+            None
+        } else {
+            cache::get(&current, &workspace_key)
+        };
+        if let Some(Value::Array(pages)) =
+            remembered.filter(|v| v.as_array().is_some_and(|a| !a.is_empty()))
+        {
+            self.show(Workspace::from_pages(&pages));
+            if let Some(progress) = cache::get(&current, &progress_key) {
+                self.counts.set(model::goal_counts(&progress));
+            }
+            // 覚えておいた方を出している間の取り直しでは、くるくるを出さない。
+            self.quiet.set(true);
+            keep_on_error = true;
+        }
         spawn_local(async move {
             let for_progress = (current.clone(), department.clone());
             let result = authed(self.token, move |access| {
-                api::strategy_workspace(access, &current, &department)
+                let pages = api::strategy_workspace(access, &current, &department)?;
+                cache::put(&current, &workspace_key, &Value::Array(pages.clone()));
+                Ok(pages)
             })
             .await;
             if self.generation.get_untracked() != generation {
                 return;
             }
             self.loading.set(false);
+            self.quiet.set(false);
             match result {
-                Ok(workspace) => {
-                    if self.organizations.with_untracked(Vec::is_empty)
-                        || !workspace.organizations.is_empty()
-                    {
-                        self.organizations.set(workspace.organizations.clone());
-                    }
-                    self.workspace.set(Some(workspace));
-                }
+                Ok(pages) => self.show(Workspace::from_pages(&pages)),
                 Err(message) => {
                     if !keep_on_error {
                         self.workspace.set(None);
@@ -86,7 +115,9 @@ impl Tree {
             // 行動の数は別に読む。読めなくてもツリーはそのまま出す。
             let (tenant, department) = for_progress;
             let progress = authed(self.token, move |access| {
-                api::strategy_progress(access, &tenant, &department)
+                let progress = api::strategy_progress(access, &tenant, &department)?;
+                cache::put(&tenant, &progress_key, &progress);
+                Ok(progress)
             })
             .await;
             if self.generation.get_untracked() != generation {
@@ -95,6 +126,13 @@ impl Tree {
             self.counts
                 .set(progress.map(|p| model::goal_counts(&p)).unwrap_or_default());
         });
+    }
+
+    fn show(self, workspace: Workspace) {
+        if self.organizations.with_untracked(Vec::is_empty) || !workspace.organizations.is_empty() {
+            self.organizations.set(workspace.organizations.clone());
+        }
+        self.workspace.set(Some(workspace));
     }
 
     fn toggle(self, id: &str) {
@@ -120,6 +158,7 @@ pub(crate) fn strategy_screen(
         counts: signal(HashMap::new()),
         collapsed: signal(HashSet::new()),
         loading: signal(true),
+        quiet: signal(false),
         error: signal(String::new()),
         generation: signal(0),
     };
@@ -180,7 +219,7 @@ pub(crate) fn strategy_screen(
                 ScrollView(style: scroll_style()) {
                     View(style: scroll_content_style()) {
                         RefreshControl(
-                            refreshing: computed(move || tree.loading.get()),
+                            refreshing: computed(move || tree.loading.get() && !tree.quiet.get()),
                             on_refresh: move |_| tree.refresh(),
                         )
                         DivisionTabs(tree: tree)
