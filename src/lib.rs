@@ -719,6 +719,35 @@ fn area_features(area: usize) -> &'static [Feature] {
     MENU.get(area).map_or(&[], |(_, items)| items)
 }
 
+/// 覚えておいた画面 → (分野, 開くもの)。分野や機能が今のメニューに無ければ None（最初の画面から）。
+fn resume_page(last: &cache::LastScreen) -> Option<(usize, Page)> {
+    let area = MENU.iter().position(|(name, _)| *name == last.area)?;
+    let page = match &last.feature {
+        Some(path) => Page::Feature(area_features(area).iter().position(|f| f.path == path)?),
+        None => Page::Agent,
+    };
+    Some((area, page))
+}
+
+#[cfg(test)]
+#[test]
+fn resume_page_follows_the_current_menu() {
+    let last = |area: &str, feature: Option<&str>| cache::LastScreen {
+        area: area.into(),
+        feature: feature.map(str::to_owned),
+        ..Default::default()
+    };
+    let strategy = MENU.iter().position(|(name, _)| *name == "戦略").unwrap();
+    assert!(
+        resume_page(&last("戦略", Some(features::STRATEGY.path)))
+            == Some((strategy, Page::Feature(0)))
+    );
+    assert!(resume_page(&last("戦略", None)) == Some((strategy, Page::Agent)));
+    // メニューから消えた分野・機能は戻さない。
+    assert!(resume_page(&last("無い分野", None)).is_none());
+    assert!(resume_page(&last("戦略", Some("/v1/gone"))).is_none());
+}
+
 /// テナントの環境を日本語で。
 fn environment_label(environment: &str) -> &'static str {
     if environment == "production" {
@@ -731,8 +760,29 @@ fn environment_label(environment: &str) -> &'static str {
 #[component]
 fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> Element {
     // 裏のメニューで選んだ分野と、下のタブで開いているもの。
-    let area = signal(0usize);
-    let page = signal(Page::Feature(0));
+    // 前回と同じ会社なら、最後に開いていた分野・タブから始める（詳細までは戻さず一覧から）。
+    let (first_area, first_page) = tenant
+        .get_untracked()
+        .and_then(|current| cache::last_screen(&current))
+        .and_then(|last| resume_page(&last))
+        .unwrap_or((0, Page::Feature(0)));
+    let area = signal(first_area);
+    let page = signal(first_page);
+    effect(move || {
+        let (a, p) = (area.get(), page.get());
+        if let Some(current) = tenant.get_untracked() {
+            cache::update_last_screen(&current, |last| {
+                last.area = MENU
+                    .get(a)
+                    .map(|(name, _)| (*name).to_owned())
+                    .unwrap_or_default();
+                last.feature = match p {
+                    Page::Feature(i) => area_features(a).get(i).map(|f| f.path.to_owned()),
+                    Page::Agent => None,
+                };
+            });
+        }
+    });
     // Agent との会話。タブを切り替えても消えないよう、ホームが持つ。
     let chat = agent::AgentChat::new();
     let open = signal(false);
