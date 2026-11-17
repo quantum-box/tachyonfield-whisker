@@ -9,10 +9,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// 組織（事業部・事業・部門）。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Organization {
     pub id: String,
     pub name: String,
@@ -21,7 +22,7 @@ pub struct Organization {
     pub parent_id: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     pub id: String,
     pub source: String,
@@ -30,7 +31,7 @@ pub struct Edge {
 }
 
 /// ノード 1 件。画面に要る項目だけを取り出し、元の値も持っておく（詳細で使う）。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
     pub kind: String,
@@ -86,7 +87,8 @@ impl Node {
 }
 
 /// 読み込んだ「思想と行動」。ページを重ねて読んだ分も、ID でまとめてここに入れる。
-#[derive(Clone, Debug, Default, PartialEq)]
+/// 次に開いたときすぐ出せるよう、このまま JSON にして覚えておく（`cache`）。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Workspace {
     pub version: i64,
     pub nodes: Vec<Node>,
@@ -1180,5 +1182,23 @@ mod tests {
         assert_eq!(status_tone("測定定義未確定"), Tone::Warn);
         assert_eq!(status_tone("完了"), Tone::Ok);
         assert_eq!(status_tone("下書き"), Tone::Muted);
+    }
+
+    #[test]
+    fn workspace_comes_back_the_same_from_the_cache() {
+        let ws = workspace();
+        let tenant = crate::api::Tenant {
+            id: "tn_cache_test".into(),
+            name: String::new(),
+            environment: String::new(),
+            platform_id: String::new(),
+        };
+        let path = crate::api::strategy_workspace_path("div-a");
+        crate::cache::put(&tenant, &path, &serde_json::to_value(&ws).unwrap());
+        let back: Workspace =
+            serde_json::from_value(crate::cache::get(&tenant, &path).unwrap()).unwrap();
+        assert_eq!(back, ws);
+        // 事業部ごとに別のものとして覚える。
+        assert!(crate::cache::get(&tenant, &crate::api::strategy_workspace_path("")).is_none());
     }
 }

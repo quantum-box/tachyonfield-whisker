@@ -346,10 +346,7 @@ pub fn strategy_workspace(
     let mut workspace: Option<crate::strategy::Workspace> = None;
     let mut cursor: Option<String> = None;
     for _ in 0..STRATEGY_MAX_PAGES {
-        let mut path = String::from("/v1/erp/strategy/workspace?limit=100");
-        if !department_id.is_empty() {
-            path.push_str(&format!("&departmentId={}", encode_query(department_id)));
-        }
+        let mut path = strategy_workspace_path(department_id);
         if let Some(cursor) = &cursor {
             path.push_str(&format!("&cursor={}", encode_query(cursor)));
         }
@@ -373,6 +370,24 @@ pub fn strategy_workspace(
     workspace.ok_or_else(|| "応答を読めません".into())
 }
 
+/// 戦略のツリーを読むパス（続きのページの cursor を付ける前）。覚えておくときの名前にも使う。
+pub fn strategy_workspace_path(department_id: &str) -> String {
+    let mut path = String::from("/v1/erp/strategy/workspace?limit=100");
+    if !department_id.is_empty() {
+        path.push_str(&format!("&departmentId={}", encode_query(department_id)));
+    }
+    path
+}
+
+/// 戦略の進み具合を読むパス。覚えておくときの名前にも使う。
+pub fn strategy_progress_path(department_id: &str) -> String {
+    let mut path = String::from("/v1/erp/strategy/progress");
+    if !department_id.is_empty() {
+        path.push_str(&format!("?departmentId={}", encode_query(department_id)));
+    }
+    path
+}
+
 /// 戦略の 1 項目を読み直す（一覧には入っていない本文などを詳細で出すため）。
 pub fn strategy_node(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
     let path = format!("/v1/erp/strategy/nodes/{}", encode_query(id));
@@ -386,10 +401,7 @@ pub fn strategy_node(token: &str, tenant: &Tenant, id: &str) -> Result<Value, St
 
 /// 戦略の進み具合（目標ごとの行動の数）。読めなくてもツリーは出せるので、呼ぶ側で無視してよい。
 pub fn strategy_progress(token: &str, tenant: &Tenant, department_id: &str) -> Result<Value, String> {
-    let mut path = String::from("/v1/erp/strategy/progress");
-    if !department_id.is_empty() {
-        path.push_str(&format!("?departmentId={}", encode_query(department_id)));
-    }
+    let path = strategy_progress_path(department_id);
     field_request("GET", &path, token, &tenant.id, &tenant.platform_id)
         .timeout(STRATEGY_TIMEOUT)
         .call()

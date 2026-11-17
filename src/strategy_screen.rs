@@ -35,8 +35,11 @@ struct Tree {
 }
 
 impl Tree {
+    /// 開いたとき・事業部を替えたとき。前に読んだツリーがあればすぐ出し、裏で取り直して差し替える。
+    /// 前のツリーを出せたなら、読めなくてもそれを残したままエラーを出す。
     fn load(self) {
-        self.fetch(false);
+        let shown = self.show_cached();
+        self.fetch(shown);
     }
 
     /// 引っ張って更新。読み込み中なら新しく頼まず、今の読み込みが終わるのを待つ。
@@ -45,6 +48,32 @@ impl Tree {
         if !self.loading.get_untracked() {
             self.fetch(true);
         }
+    }
+
+    /// 覚えておいた、今の会社・事業部のツリー（と行動の数）を出す。出せたら true。
+    fn show_cached(self) -> bool {
+        let Some(current) = self.tenant.get_untracked() else {
+            return false;
+        };
+        let department = self.department.get_untracked();
+        let Some(workspace) = cache::get(&current, &api::strategy_workspace_path(&department))
+            .and_then(|value| serde_json::from_value::<Workspace>(value).ok())
+        else {
+            return false;
+        };
+        self.show(workspace);
+        let progress = cache::get(&current, &api::strategy_progress_path(&department));
+        self.counts
+            .set(progress.map(|p| model::goal_counts(&p)).unwrap_or_default());
+        true
+    }
+
+    /// ツリーを差し替える。開閉・選択中の事業部は Tree に持っているので、そのまま残る。
+    fn show(self, workspace: Workspace) {
+        if self.organizations.with_untracked(Vec::is_empty) || !workspace.organizations.is_empty() {
+            self.organizations.set(workspace.organizations.clone());
+        }
+        self.workspace.set(Some(workspace));
     }
 
     fn fetch(self, keep_on_error: bool) {
@@ -59,7 +88,11 @@ impl Tree {
         spawn_local(async move {
             let for_progress = (current.clone(), department.clone());
             let result = authed(self.token, move |access| {
-                api::strategy_workspace(access, &current, &department)
+                let workspace = api::strategy_workspace(access, &current, &department)?;
+                if let Ok(value) = serde_json::to_value(&workspace) {
+                    cache::put(&current, &api::strategy_workspace_path(&department), &value);
+                }
+                Ok(workspace)
             })
             .await;
             if self.generation.get_untracked() != generation {
@@ -67,14 +100,7 @@ impl Tree {
             }
             self.loading.set(false);
             match result {
-                Ok(workspace) => {
-                    if self.organizations.with_untracked(Vec::is_empty)
-                        || !workspace.organizations.is_empty()
-                    {
-                        self.organizations.set(workspace.organizations.clone());
-                    }
-                    self.workspace.set(Some(workspace));
-                }
+                Ok(workspace) => self.show(workspace),
                 Err(message) => {
                     if !keep_on_error {
                         self.workspace.set(None);
@@ -86,14 +112,24 @@ impl Tree {
             // 行動の数は別に読む。読めなくてもツリーはそのまま出す。
             let (tenant, department) = for_progress;
             let progress = authed(self.token, move |access| {
-                api::strategy_progress(access, &tenant, &department)
+                let progress = api::strategy_progress(access, &tenant, &department)?;
+                cache::put(
+                    &tenant,
+                    &api::strategy_progress_path(&department),
+                    &progress,
+                );
+                Ok(progress)
             })
             .await;
             if self.generation.get_untracked() != generation {
                 return;
             }
-            self.counts
-                .set(progress.map(|p| model::goal_counts(&p)).unwrap_or_default());
+            // 読めなかったときは、覚えておいた数を出していればそれを残す。
+            match progress {
+                Ok(progress) => self.counts.set(model::goal_counts(&progress)),
+                Err(_) if keep_on_error => {}
+                Err(_) => self.counts.set(HashMap::new()),
+            }
         });
     }
 
