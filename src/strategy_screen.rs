@@ -111,19 +111,35 @@ pub(crate) fn strategy_screen(
     token: RwSignal<Option<String>>,
     tenant: RwSignal<Option<Tenant>>,
 ) -> Element {
+    // 前回選んでいた事業部と、閉じていた行から始める（同じ会社のときだけ）。
+    let last = tenant
+        .get_untracked()
+        .and_then(|current| cache::last_screen(&current))
+        .unwrap_or_default();
     let tree = Tree {
         token,
         tenant,
-        department: signal(String::new()),
+        department: signal(last.department),
         workspace: signal(None),
         organizations: signal(Vec::new()),
         counts: signal(HashMap::new()),
-        collapsed: signal(HashSet::new()),
+        collapsed: signal(last.collapsed.into_iter().collect()),
         loading: signal(true),
         error: signal(String::new()),
         generation: signal(0),
     };
     tree.load();
+    effect(move || {
+        let department = tree.department.get();
+        let mut collapsed: Vec<String> = tree.collapsed.with(|set| set.iter().cloned().collect());
+        collapsed.sort();
+        if let Some(current) = tenant.get_untracked() {
+            cache::update_last_screen(&current, |last| {
+                last.department = department;
+                last.collapsed = collapsed;
+            });
+        }
+    });
     let selected = signal(None::<Value>);
     let rows = computed(move || {
         let collapsed = tree.collapsed.get();
