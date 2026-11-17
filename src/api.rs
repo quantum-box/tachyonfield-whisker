@@ -336,17 +336,19 @@ const STRATEGY_TIMEOUT: Duration = Duration::from_secs(55);
 /// 戦略を続きのページまで読む上限。
 const STRATEGY_MAX_PAGES: usize = 20;
 
-/// 戦略「思想と行動」を読む。`nextCursor` があれば続きも読み、版が同じページをまとめる。
+/// 戦略「思想と行動」を読む。`nextCursor` があれば続きも読み、読んだページの応答をそのまま順に返す。
+/// まとめるのは `Workspace::from_pages`（覚えておいたページからも同じようにツリーを作れるように）。
 /// `department_id` が空でなければ、その事業部（組織）の範囲に絞る。
 pub fn strategy_workspace(
     token: &str,
     tenant: &Tenant,
     department_id: &str,
-) -> Result<crate::strategy::Workspace, String> {
-    let mut workspace: Option<crate::strategy::Workspace> = None;
+) -> Result<Vec<Value>, String> {
+    let mut pages: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..STRATEGY_MAX_PAGES {
-        let mut path = String::from("/v1/erp/strategy/workspace?limit=100");
+        let mut path = String::from(STRATEGY_WORKSPACE_PATH);
+        path.push_str("?limit=100");
         if !department_id.is_empty() {
             path.push_str(&format!("&departmentId={}", encode_query(department_id)));
         }
@@ -361,17 +363,22 @@ pub fn strategy_workspace(
             .map_err(|e| format!("応答を読めません: {e}"))?;
         let page = crate::strategy::Workspace::from_value(&body);
         let next = page.next_cursor.clone().filter(|_| !page.complete);
-        workspace = Some(match workspace {
-            Some(previous) => previous.merge(page),
-            None => page,
-        });
+        pages.push(body);
         match next {
             Some(next) if Some(&next) != cursor.as_ref() => cursor = Some(next),
             _ => break,
         }
     }
-    workspace.ok_or_else(|| "応答を読めません".into())
+    if pages.is_empty() {
+        return Err("応答を読めません".into());
+    }
+    Ok(pages)
 }
+
+/// 戦略「思想と行動」の API の場所。端末に覚えておくときの名前にも使う。
+pub const STRATEGY_WORKSPACE_PATH: &str = "/v1/erp/strategy/workspace";
+/// 戦略の進み具合の API の場所。
+pub const STRATEGY_PROGRESS_PATH: &str = "/v1/erp/strategy/progress";
 
 /// 戦略の 1 項目を読み直す（一覧には入っていない本文などを詳細で出すため）。
 pub fn strategy_node(token: &str, tenant: &Tenant, id: &str) -> Result<Value, String> {
@@ -386,7 +393,7 @@ pub fn strategy_node(token: &str, tenant: &Tenant, id: &str) -> Result<Value, St
 
 /// 戦略の進み具合（目標ごとの行動の数）。読めなくてもツリーは出せるので、呼ぶ側で無視してよい。
 pub fn strategy_progress(token: &str, tenant: &Tenant, department_id: &str) -> Result<Value, String> {
-    let mut path = String::from("/v1/erp/strategy/progress");
+    let mut path = String::from(STRATEGY_PROGRESS_PATH);
     if !department_id.is_empty() {
         path.push_str(&format!("?departmentId={}", encode_query(department_id)));
     }
