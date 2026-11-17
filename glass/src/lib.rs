@@ -33,6 +33,8 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_menu_list_schema::element_provider(),
             native_record_list_schema::element_provider(),
             native_keyboard_observer_schema::element_provider(),
+            native_keyboard_dismiss_schema::element_provider(),
+            native_keyboard_keep_schema::element_provider(),
             native_refresh_control_schema::element_provider(),
             native_appearance_observer_schema::element_provider(),
             native_nav_bar_schema::element_provider(),
@@ -276,6 +278,56 @@ pub fn keyboard_observer(on_change: Callback<f32>) -> Element {
 #[component]
 pub fn keyboard_observer(on_change: Callback<f32>) -> Element {
     let _ = on_change;
+    render! { View() }
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:KeyboardDismiss", measurement = None)]
+pub fn native_keyboard_dismiss(style: Style) {}
+
+/// 見えない部品。アプリの根元に 1 つ置くと、全画面で iOS 標準のようにキーボードを閉じられる。
+/// 入力欄の外をタップする・下へドラッグする（スクロールする場所では指に合わせて引き下ろす）と閉じる。
+/// ボタンや行の選択はそのまま効き、入力中の文字も残る。
+/// iOS 以外は何もしない（Android は戻る操作、Web はほかの所を押すと、OS・ブラウザが閉じる）。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn keyboard_dismiss() -> Element {
+    use whisker::css::PositionKind;
+    NativeKeyboardDismiss::builder()
+        .style(css!(position: PositionKind::Absolute, width: px(0), height: px(0)))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn keyboard_dismiss() -> Element {
+    render! { View() }
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:KeyboardKeep", measurement = None)]
+pub fn native_keyboard_keep(style: Style) {}
+
+/// 見えない部品。置いた親の範囲をタップしても、キーボードを閉じない（チャットの入力欄と送るボタンなど）。
+/// 親は `position: Relative` にしておく。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn keyboard_keep() -> Element {
+    use whisker::css::PositionKind;
+    NativeKeyboardKeep::builder()
+        .style(css!(
+            position: PositionKind::Absolute,
+            top: px(0),
+            right: px(0),
+            bottom: px(0),
+            left: px(0),
+        ))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn keyboard_keep() -> Element {
     render! { View() }
 }
 

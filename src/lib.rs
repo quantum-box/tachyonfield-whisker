@@ -34,7 +34,8 @@ use agent::AgentScreen;
 use api::Tenant;
 use features::{Feature, MENU};
 use field_glass::{
-    AppearanceObserver, AttachButton, Backdrop, Glass, KeyboardObserver, RefreshControl,
+    AppearanceObserver, AttachButton, Backdrop, Glass, KeyboardDismiss, KeyboardObserver,
+    RefreshControl,
 };
 #[cfg(target_os = "ios")]
 use field_glass::{
@@ -230,6 +231,8 @@ fn app() -> Element {
                     reduce.set(value);
                 }
             })
+            // 入力欄の外のタップ・下へのドラッグで、どの画面でもキーボードを閉じる。
+            KeyboardDismiss()
             // 幅と外観の初回取得を待ち、以後は画面の状態を保つ。
             AppearanceContent(dark: dark, wide: wide) { Root }
         }
