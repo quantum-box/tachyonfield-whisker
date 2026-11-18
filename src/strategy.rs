@@ -1065,6 +1065,95 @@ pub fn collapse_to_objectives(ws: &Workspace) -> HashSet<String> {
         .collect()
 }
 
+// ---------------------------------------------------------------- ナレッジ
+
+/// ナレッジ 1 件（`/v1/erp/strategy/knowledge`）。ブランドガイドや商品の資料など、戦略ツリーとは
+/// 別に会社が持っておくこと。ツリーの項目に、範囲が合うものを出す。
+#[derive(Clone, Debug, PartialEq)]
+pub struct KnowledgeEntry {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    /// 知っておくこと。
+    pub points: Vec<String>,
+    /// 守ること。
+    pub follow: Vec<String>,
+    /// 避けること。
+    pub avoid: Vec<String>,
+    /// 効く組織。空なら全社。
+    pub department_ids: Vec<String>,
+}
+
+/// ナレッジの一覧の応答から、使っているものを取り出す。
+pub fn knowledge_entries(value: &Value) -> Vec<KnowledgeEntry> {
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str().map(str::to_owned))
+            .collect()
+    };
+    value["knowledge"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["active"].as_bool() != Some(false))
+        .filter_map(|entry| {
+            Some(KnowledgeEntry {
+                id: entry["id"].as_str()?.to_owned(),
+                title: entry["title"].as_str().unwrap_or_default().to_owned(),
+                kind: entry["kind"].as_str().unwrap_or("other").to_owned(),
+                points: strings(&entry["points"]),
+                follow: strings(&entry["follow"]),
+                avoid: strings(&entry["avoid"]),
+                department_ids: strings(&entry["departmentIds"]),
+            })
+        })
+        .collect()
+}
+
+/// ナレッジの種類の名前（Web と同じ）。
+pub fn knowledge_kind_label(kind: &str) -> &'static str {
+    match kind {
+        "brand" => "ブランド",
+        "product" => "商品・サービス",
+        "customer" => "お客さま",
+        "process" => "業務の進め方",
+        "quality" => "品質・安全",
+        "legal" => "法令・規約",
+        _ => "その他",
+    }
+}
+
+/// 項目に効くナレッジ。全社のものはどの項目にも、組織のものはその組織と下の組織の項目に効く
+/// （サーバーの決まりと同じ。全社の項目には全社のものだけ）。
+pub fn knowledge_for<'a>(
+    node: &Node,
+    entries: &'a [KnowledgeEntry],
+    organizations: &[Organization],
+) -> Vec<&'a KnowledgeEntry> {
+    let mut places = HashSet::new();
+    for id in &node.department_ids {
+        let mut current = Some(id.clone());
+        while let Some(id) = current {
+            if !places.insert(id.clone()) {
+                break;
+            }
+            current = organizations
+                .iter()
+                .find(|o| o.id == id)
+                .and_then(|o| o.parent_id.clone());
+        }
+    }
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.department_ids.is_empty()
+                || entry.department_ids.iter().any(|id| places.contains(id))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1274,5 +1363,28 @@ mod tests {
         assert_eq!(status_tone("測定定義未確定"), Tone::Warn);
         assert_eq!(status_tone("完了"), Tone::Ok);
         assert_eq!(status_tone("下書き"), Tone::Muted);
+    }
+
+    #[test]
+    fn knowledge_applies_to_its_organization_and_below() {
+        let value = serde_json::json!({"knowledge": [
+            {"id": "all", "title": "表示ルール", "kind": "legal", "avoid": ["誇大な表現"], "departmentIds": []},
+            {"id": "brand", "title": "ブランドガイド", "kind": "brand", "points": ["看板は季節のパスタ"], "departmentIds": ["biz"]},
+            {"id": "old", "title": "古い資料", "active": false, "departmentIds": []}
+        ]});
+        let entries = knowledge_entries(&value);
+        assert_eq!(entries.len(), 2, "archived entries are left out");
+        assert_eq!(entries[1].points, vec!["看板は季節のパスタ"]);
+        assert_eq!(knowledge_kind_label(&entries[1].kind), "ブランド");
+        let orgs = vec![
+            Organization { id: "div".into(), name: "事業部".into(), kind: "division".into(), parent_id: None },
+            Organization { id: "biz".into(), name: "店".into(), kind: "business".into(), parent_id: Some("div".into()) },
+            Organization { id: "kitchen".into(), name: "厨房".into(), kind: "department".into(), parent_id: Some("biz".into()) },
+        ];
+        let mut node = Node::from_value(&serde_json::json!({"id": "a", "kind": "action", "scope": {"departmentIds": ["kitchen"]}})).unwrap();
+        let ids = |list: Vec<&KnowledgeEntry>| list.into_iter().map(|e| e.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(knowledge_for(&node, &entries, &orgs)), vec!["all", "brand"]);
+        node.department_ids = vec![];
+        assert_eq!(ids(knowledge_for(&node, &entries, &orgs)), vec!["all"]);
     }
 }
