@@ -887,6 +887,53 @@ pub struct Row {
     pub owner: Option<String>,
     pub status: Option<(String, Tone)>,
     pub counts: Option<Counts>,
+    /// 自分が責任者の項目の札（渡された目標・下の段がまだない）。`my_marks` から付ける。
+    pub marks: Vec<(String, Tone)>,
+}
+
+/// 自分の担当（`/v1/erp/strategy/me`）から、行に付ける札を項目ごとに作る。
+/// 上の人から渡された項目には「渡された{段の名前}」、下の段がまだ無い項目には「下の段がまだない」。
+pub fn my_marks(me: &Value) -> HashMap<String, Vec<(String, Tone)>> {
+    me["owned"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let id = item["id"].as_str()?.to_owned();
+            let mut marks = Vec::new();
+            if item["handedDown"].as_bool() == Some(true) {
+                let level = item["level"].as_str().unwrap_or("目標");
+                marks.push((format!("渡された{level}"), Tone::Info));
+            }
+            if item["needsBreakdown"].as_bool() == Some(true) {
+                marks.push(("下の段がまだない".to_owned(), Tone::Warn));
+            }
+            (!marks.is_empty()).then_some((id, marks))
+        })
+        .collect()
+}
+
+/// ツリーの上に出す、自分の担当のまとめ。担当が無ければ出さない。
+pub fn my_summary(me: &Value) -> Option<String> {
+    let owned = me["owned"].as_array()?;
+    if owned.is_empty() {
+        return None;
+    }
+    let count = |key: &str| {
+        owned
+            .iter()
+            .filter(|item| item[key].as_bool() == Some(true))
+            .count()
+    };
+    let mut text = format!("あなたの担当 {} 件", owned.len());
+    let (handed, open) = (count("handedDown"), count("needsBreakdown"));
+    if handed > 0 {
+        text.push_str(&format!("・渡された {handed} 件"));
+    }
+    if open > 0 {
+        text.push_str(&format!("・下の段がまだない {open} 件"));
+    }
+    Some(text)
 }
 
 /// 開いている行だけを、描く順に並べる（閉じた行の下は除く）。
@@ -999,6 +1046,7 @@ pub fn rows(
             } else {
                 counts.get(&node.id).copied()
             },
+            marks: Vec::new(),
         });
     }
     result
@@ -1196,6 +1244,28 @@ mod tests {
         );
         assert!(tree.complete);
         assert_eq!(Workspace::from_pages(&[]), Workspace::default());
+    }
+
+    #[test]
+    fn my_items_are_marked_and_summed_up() {
+        let me = serde_json::json!({"owned": [
+            {"id": "q3", "level": "四半期O", "handedDown": true, "needsBreakdown": true},
+            {"id": "kr", "level": "KR", "handedDown": false, "needsBreakdown": false},
+        ]});
+        let marks = my_marks(&me);
+        assert_eq!(
+            marks["q3"],
+            vec![
+                ("渡された四半期O".to_owned(), Tone::Info),
+                ("下の段がまだない".to_owned(), Tone::Warn),
+            ]
+        );
+        assert!(!marks.contains_key("kr"));
+        assert_eq!(
+            my_summary(&me).as_deref(),
+            Some("あなたの担当 2 件・渡された 1 件・下の段がまだない 1 件")
+        );
+        assert_eq!(my_summary(&serde_json::json!({"owned": []})), None);
     }
 
     #[test]
