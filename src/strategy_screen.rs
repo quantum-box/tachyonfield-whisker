@@ -37,6 +37,8 @@ struct Tree {
     /// タブに出す組織。絞り込んだ応答で減っても、タブが消えないよう最初に読んだものを残す。
     organizations: RwSignal<Vec<model::Organization>>,
     counts: RwSignal<HashMap<String, Counts>>,
+    /// 自分の担当（`/v1/erp/strategy/me`）。行の札とツリーの上のまとめに使う。
+    me: RwSignal<Option<Value>>,
     collapsed: RwSignal<HashSet<String>>,
     loading: RwSignal<bool>,
     /// 覚えておいたツリーを出したまま、裏で取り直している。
@@ -85,6 +87,9 @@ impl Tree {
             if let Some(progress) = cache::get(&current, &progress_key) {
                 self.counts.set(model::goal_counts(&progress));
             }
+            if let Some(me) = cache::get(&current, api::STRATEGY_ME_PATH) {
+                self.me.set(Some(me));
+            }
             // 覚えておいた方を出している間の取り直しでは、くるくるを出さない。
             self.quiet.set(true);
             keep_on_error = true;
@@ -114,6 +119,7 @@ impl Tree {
             }
             // 行動の数は別に読む。読めなくてもツリーはそのまま出す。
             let (tenant, department) = for_progress;
+            let me_tenant = tenant.clone();
             let progress = authed(self.token, move |access| {
                 let progress = api::strategy_progress(access, &tenant, &department)?;
                 cache::put(&tenant, &progress_key, &progress);
@@ -125,6 +131,19 @@ impl Tree {
             }
             self.counts
                 .set(progress.map(|p| model::goal_counts(&p)).unwrap_or_default());
+            // 自分の担当も別に読む。読めなくてもツリーはそのまま出す（前に読んだ札は残す）。
+            let me = authed(self.token, move |access| {
+                let me = api::strategy_me(access, &me_tenant)?;
+                cache::put(&me_tenant, api::STRATEGY_ME_PATH, &me);
+                Ok(me)
+            })
+            .await;
+            if self.generation.get_untracked() != generation {
+                return;
+            }
+            if let Ok(me) = me {
+                self.me.set(Some(me));
+            }
         });
     }
 
@@ -156,6 +175,7 @@ pub(crate) fn strategy_screen(
         workspace: signal(None),
         organizations: signal(Vec::new()),
         counts: signal(HashMap::new()),
+        me: signal(None),
         collapsed: signal(HashSet::new()),
         loading: signal(true),
         quiet: signal(false),
@@ -167,10 +187,19 @@ pub(crate) fn strategy_screen(
     let rows = computed(move || {
         let collapsed = tree.collapsed.get();
         let counts = tree.counts.get();
-        tree.workspace
+        let marks = tree.me.with(|me| me.as_ref().map(model::my_marks).unwrap_or_default());
+        let mut rows = tree
+            .workspace
             .with(|ws| ws.as_ref().map(|ws| model::rows(ws, &collapsed, &counts)))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        for row in &mut rows {
+            if let Some(list) = marks.get(&row.id) {
+                row.marks = list.clone();
+            }
+        }
+        rows
     });
+    let summary = computed(move || tree.me.with(|me| me.as_ref().and_then(model::my_summary)));
 
     // 詳細は一覧の上に重ねて出す（機能の一覧と同じ動き）。右へ引くと、下からツリーが見えてくる。
     let back = use_context::<BackSwipe>();
@@ -224,6 +253,16 @@ pub(crate) fn strategy_screen(
                         )
                         DivisionTabs(tree: tree)
                         Legend(tree: tree)
+                        Show(when: move || summary.with(Option::is_some)) {
+                            Text(
+                                value: computed(move || summary.get().unwrap_or_default()),
+                                style: computed(move || css!(
+                                    color: hex(SECONDARY_LABEL),
+                                    font_size: px(13),
+                                    padding: (px(4), px(16), px(8), px(16)),
+                                )),
+                            )
+                        }
                         Show(when: move || tree.loading.get() && tree.workspace.with(Option::is_none)) {
                             Notice(message: "読み込み中…")
                         }
@@ -241,7 +280,7 @@ pub(crate) fn strategy_screen(
                                         rows.get().into_iter().map(|row| (row, dark)).collect::<Vec<_>>()
                                     },
                                     // 行内の固定色を再計算する。選択・開閉状態は Tree に保持する。
-                                    key: |item: &(Row, bool)| format!("{}:{}:{}:{}", item.0.id, item.0.open, item.0.depth, item.1),
+                                    key: |item: &(Row, bool)| format!("{}:{}:{}:{}:{}", item.0.id, item.0.open, item.0.depth, item.1, item.0.marks.len()),
                                     children: move |item: ReadSignal<(Row, bool)>| {
                                         let row = item.get_untracked().0;
                                         let last = rows.with_untracked(|all| all.last().map(|r| r.id.clone()));
@@ -553,6 +592,10 @@ fn tree_row(row: Row, separator: bool, tree: Tree, selected: RwSignal<Option<Val
             fg,
             true,
         ));
+    }
+    for (label, tone) in &row.marks {
+        let (bg, fg) = tone_pill_colors(*tone);
+        meta.push((meta.len(), label.clone(), bg, fg, true));
     }
     let counts_text = row.counts.map(|c| {
         if c.total > 0 {
