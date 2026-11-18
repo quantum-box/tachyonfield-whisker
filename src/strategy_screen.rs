@@ -39,6 +39,8 @@ struct Tree {
     counts: RwSignal<HashMap<String, Counts>>,
     /// 自分の担当（`/v1/erp/strategy/me`）。行の札とツリーの上のまとめに使う。
     me: RwSignal<Option<Value>>,
+    /// 会社のナレッジ。詳細で、その項目に効くものを出す。
+    knowledge: RwSignal<Vec<model::KnowledgeEntry>>,
     collapsed: RwSignal<HashSet<String>>,
     loading: RwSignal<bool>,
     /// 覚えておいたツリーを出したまま、裏で取り直している。
@@ -90,6 +92,9 @@ impl Tree {
             if let Some(me) = cache::get(&current, api::STRATEGY_ME_PATH) {
                 self.me.set(Some(me));
             }
+            if let Some(knowledge) = cache::get(&current, api::STRATEGY_KNOWLEDGE_PATH) {
+                self.knowledge.set(model::knowledge_entries(&knowledge));
+            }
             // 覚えておいた方を出している間の取り直しでは、くるくるを出さない。
             self.quiet.set(true);
             keep_on_error = true;
@@ -120,6 +125,7 @@ impl Tree {
             // 行動の数は別に読む。読めなくてもツリーはそのまま出す。
             let (tenant, department) = for_progress;
             let me_tenant = tenant.clone();
+            let knowledge_tenant = tenant.clone();
             let progress = authed(self.token, move |access| {
                 let progress = api::strategy_progress(access, &tenant, &department)?;
                 cache::put(&tenant, &progress_key, &progress);
@@ -143,6 +149,19 @@ impl Tree {
             }
             if let Ok(me) = me {
                 self.me.set(Some(me));
+            }
+            // ナレッジも別に読む。読めなければ前に読んだものを残す。
+            let knowledge = authed(self.token, move |access| {
+                let knowledge = api::strategy_knowledge(access, &knowledge_tenant)?;
+                cache::put(&knowledge_tenant, api::STRATEGY_KNOWLEDGE_PATH, &knowledge);
+                Ok(knowledge)
+            })
+            .await;
+            if self.generation.get_untracked() != generation {
+                return;
+            }
+            if let Ok(knowledge) = knowledge {
+                self.knowledge.set(model::knowledge_entries(&knowledge));
             }
         });
     }
@@ -176,6 +195,7 @@ pub(crate) fn strategy_screen(
         organizations: signal(Vec::new()),
         counts: signal(HashMap::new()),
         me: signal(None),
+        knowledge: signal(Vec::new()),
         collapsed: signal(HashSet::new()),
         loading: signal(true),
         quiet: signal(false),
@@ -1016,6 +1036,33 @@ fn strategy_detail_body(
     let has_documents = !documents.is_empty();
     let has_parents = !parents.is_empty();
     let has_children = !children.is_empty();
+    // この項目に効くナレッジ。1 件ごとに、種類・要点・守る・避けるを並べる。
+    let knowledge: Vec<(String, Vec<(String, String)>)> = tree.knowledge.with_untracked(|entries| {
+        let organizations = tree.workspace.with_untracked(|ws| {
+            ws.as_ref().map(|w| w.organizations.clone()).unwrap_or_default()
+        });
+        model::knowledge_for(&node, entries, &organizations)
+            .into_iter()
+            .map(|entry| {
+                let mut rows = vec![(
+                    "種類".to_owned(),
+                    model::knowledge_kind_label(&entry.kind).to_owned(),
+                )];
+                for (label, lines) in [
+                    ("要点", &entry.points),
+                    ("守る", &entry.follow),
+                    ("避ける", &entry.avoid),
+                ] {
+                    if !lines.is_empty() {
+                        rows.push((label.to_owned(), lines.join("\n")));
+                    }
+                }
+                (format!("ナレッジ：{}", entry.title), rows)
+            })
+            .collect()
+    });
+    let has_knowledge = !knowledge.is_empty();
+    let knowledge = signal(knowledge);
 
     render! {
         ScrollView(style: scroll_style()) {
@@ -1042,6 +1089,21 @@ fn strategy_detail_body(
                 Show(when: move || has_documents) {
                     SectionHeader(title: computed(|| "つないだ文書".to_owned()))
                     InfoGroup(rows: documents.clone(), inline: false)
+                }
+                Show(when: move || has_knowledge) {
+                    ForEach(
+                        each: move || knowledge.get(),
+                        key: |entry: &(String, Vec<(String, String)>)| entry.0.clone(),
+                        children: move |entry: ReadSignal<(String, Vec<(String, String)>)>| {
+                            let (title, rows) = entry.get_untracked();
+                            render! {
+                                View(style: css!(display: Display::Flex, flex_direction: FlexDirection::Column)) {
+                                    SectionHeader(title: computed(move || title.clone()))
+                                    InfoGroup(rows: rows.clone(), inline: false)
+                                }
+                            }
+                        },
+                    )
                 }
                 Show(when: move || has_parents) {
                     SectionHeader(title: computed(|| "上の段".to_owned()))

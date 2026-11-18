@@ -404,6 +404,19 @@ pub fn strategy_me(token: &str, tenant: &Tenant) -> Result<Value, String> {
         .map_err(|e| format!("応答を読めません: {e}"))
 }
 
+pub const STRATEGY_KNOWLEDGE_PATH: &str = "/v1/erp/strategy/knowledge";
+
+/// 会社のナレッジ（ブランドガイドなど、ツリーとは別に持っておくこと）。
+/// 読めなくてもツリーは出せるので、呼ぶ側で無視してよい。
+pub fn strategy_knowledge(token: &str, tenant: &Tenant) -> Result<Value, String> {
+    field_request("GET", STRATEGY_KNOWLEDGE_PATH, token, &tenant.id, &tenant.platform_id)
+        .timeout(STRATEGY_TIMEOUT)
+        .call()
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|e| format!("応答を読めません: {e}"))
+}
+
 /// 戦略の進み具合（目標ごとの行動の数）。読めなくてもツリーは出せるので、呼ぶ側で無視してよい。
 pub fn strategy_progress(token: &str, tenant: &Tenant, department_id: &str) -> Result<Value, String> {
     let mut path = String::from(STRATEGY_PROGRESS_PATH);
