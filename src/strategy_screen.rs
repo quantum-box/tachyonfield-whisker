@@ -280,7 +280,11 @@ pub(crate) fn strategy_screen(
                                         rows.get().into_iter().map(|row| (row, dark)).collect::<Vec<_>>()
                                     },
                                     // 行内の固定色を再計算する。選択・開閉状態は Tree に保持する。
-                                    key: |item: &(Row, bool)| format!("{}:{}:{}:{}:{}", item.0.id, item.0.open, item.0.depth, item.1, item.0.marks.len()),
+                                    // 札は行を作るときに一度だけ描くので、札の中身が変わったら行を作り直す。
+                                    key: |item: &(Row, bool)| {
+                                        let marks: Vec<&str> = item.0.marks.iter().map(|(label, _)| label.as_str()).collect();
+                                        format!("{}:{}:{}:{}:{}", item.0.id, item.0.open, item.0.depth, item.1, marks.join("|"))
+                                    },
                                     children: move |item: ReadSignal<(Row, bool)>| {
                                         let row = item.get_untracked().0;
                                         let last = rows.with_untracked(|all| all.last().map(|r| r.id.clone()));
