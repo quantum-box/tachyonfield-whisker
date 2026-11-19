@@ -344,7 +344,12 @@ const EXPENSE_FIELDS: &[Field] = &[
     .required(),
 ];
 const INVOICE_FIELDS: &[Field] = &[
-    Field::new("clientId", "取引先", InputKind::Reference(CLIENTS)).required(),
+    Field::new(
+        "clientId",
+        "登録済みの取引先",
+        InputKind::Reference(CLIENTS),
+    )
+    .help("未登録の相手へ請求する場合は空欄にし、宛名を入力してください。"),
     Field::text("clientName", "宛名").empty(Empty::Null),
     Field::new("clientEmail", "メールアドレス", InputKind::Email).empty(Empty::Null),
     Field::text("clientPhone", "電話番号").empty(Empty::Null),
@@ -1883,6 +1888,17 @@ fn prepare_expense(body: &mut Value, _: &Value) -> Result<(), String> {
     Ok(())
 }
 fn prepare_invoice(body: &mut Value, _: &Value) -> Result<(), String> {
+    if body["clientId"].as_str().is_none_or(str::is_empty) {
+        let name = body["clientName"]
+            .as_str()
+            .filter(|name| !name.trim().is_empty())
+            .ok_or("登録済みの取引先を選ぶか、未登録の相手の宛名を入力してください。")?;
+        body["billTo"] = json!({"kind":"unregistered", "name":name,
+            "email":body["clientEmail"], "phone":body["clientPhone"]});
+        body.as_object_mut()
+            .ok_or("請求書の入力を確認してください。")?
+            .remove("clientId");
+    }
     let lines = body["lineItems"]
         .as_array()
         .filter(|v| !v.is_empty())
@@ -2160,13 +2176,32 @@ mod tests {
     }
     #[test]
     fn invoice_draft_cannot_send_or_overflow_amounts() {
-        let mut body = json!({"lineItems":[{"quantity":2,"unitPrice":500}],"taxAmount":100});
+        let mut body = json!({"clientId":"client-a","lineItems":[{"quantity":2,"unitPrice":500}],"taxAmount":100});
         prepare_invoice(&mut body, &Value::Null).unwrap();
         assert_eq!(body["sendEmail"], false);
         assert_eq!(body["sendSms"], false);
         assert_eq!(body["createPaymentLink"], false);
-        let mut bad = json!({"lineItems":[{"quantity":9_007_199_254_740_991_i64,"unitPrice":2}],"taxAmount":0});
+        let mut bad = json!({"clientId":"client-a","lineItems":[{"quantity":9_007_199_254_740_991_i64,"unitPrice":2}],"taxAmount":0});
         assert!(prepare_invoice(&mut bad, &Value::Null).is_err());
+    }
+    #[test]
+    fn invoice_can_address_an_unregistered_client_without_creating_a_fake_id() {
+        let operation = RESOURCES
+            .iter()
+            .find(|r| r.key == "invoices")
+            .unwrap()
+            .create
+            .unwrap();
+        let draft = json!({"clientId":"", "clientName":"未登録の取引先", "clientEmail":"bill@example.com", "currency":"JPY", "dueDate":"2026-12-01", "lineItems":[{"description":"利用料", "quantity":"1", "unitPrice":"1000"}], "taxAmount":"100"});
+        let body = model::request_body(operation, &draft, &Value::Null, "key").unwrap();
+        assert!(body.get("clientId").is_none());
+        assert_eq!(
+            body["billTo"],
+            json!({"kind":"unregistered", "name":"未登録の取引先", "email":"bill@example.com", "phone":null})
+        );
+        let mut missing = draft;
+        missing["clientName"] = json!("");
+        assert!(model::request_body(operation, &missing, &Value::Null, "key").is_err());
     }
     #[test]
     fn purchase_order_create_starts_in_draft_and_rejects_zero_quantity() {

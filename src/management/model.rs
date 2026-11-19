@@ -286,6 +286,14 @@ pub fn draft(fields: &[Field], original: &Value) -> Value {
     draft_with_currency(fields, original, "JPY")
 }
 
+pub fn mutation_draft(operation: Mutation, original: &Value) -> Result<Value, String> {
+    let visible = match operation.prefill {
+        Some(prefill) => prefill(original)?,
+        None => original.clone(),
+    };
+    Ok(draft(operation.fields, &visible))
+}
+
 fn draft_with_currency(fields: &[Field], original: &Value, parent_currency: &str) -> Value {
     let currency = currency(original, parent_currency);
     let mut result = json!({});
@@ -293,6 +301,20 @@ fn draft_with_currency(fields: &[Field], original: &Value, parent_currency: &str
         let value = value_at(original, field.read_key);
         let initial = match field.kind {
             InputKind::Hidden => value.clone(),
+            InputKind::ReadOnly if field.read_key.starts_with("@money:") => {
+                let amount = value_at(original, &field.read_key[7..]);
+                Value::String(
+                    minor_to_decimal(amount, &currency)
+                        .map(|amount| {
+                            if currency == "JPY" {
+                                format!("¥{amount}")
+                            } else {
+                                format!("{amount} {currency}")
+                            }
+                        })
+                        .unwrap_or_default(),
+                )
+            }
             InputKind::Attachments(_) => value
                 .as_array()
                 .cloned()

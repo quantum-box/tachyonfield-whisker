@@ -16,6 +16,8 @@ mod form;
 mod gates;
 mod insights;
 mod intake;
+mod inventory_workflows;
+mod invoice_workflows;
 mod jobcan;
 mod model;
 mod operations;
@@ -45,7 +47,11 @@ pub fn resources() -> Vec<schema::Resource> {
         .chain(accounting_operations::RESOURCES)
         .chain(finance_views::RESOURCES)
         .chain(receipt_pricing::RESOURCES)
+        .chain(invoice_workflows::RESOURCES)
+        .chain(inventory_workflows::RESOURCES)
         .copied()
+        .map(invoice_workflows::decorate)
+        .map(inventory_workflows::decorate)
         .collect()
 }
 

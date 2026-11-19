@@ -151,6 +151,9 @@ pub struct Mutation {
     pub path: &'static str,
     pub fields: &'static [Field],
     pub prepare: Option<PayloadHook>,
+    /// Converts server metadata into visible inputs without changing the original
+    /// used for identity checks and mutation preflight.
+    pub prefill: Option<fn(&Value) -> Result<Value, String>>,
     pub available: Option<Availability>,
     pub destructive: bool,
     pub explanation: &'static str,
@@ -177,6 +180,7 @@ impl Mutation {
             path,
             fields,
             prepare: None,
+            prefill: None,
             available: None,
             destructive: false,
             explanation: "",
@@ -192,6 +196,10 @@ impl Mutation {
     }
     pub const fn prepare(mut self, hook: PayloadHook) -> Self {
         self.prepare = Some(hook);
+        self
+    }
+    pub const fn prefill(mut self, hook: fn(&Value) -> Result<Value, String>) -> Self {
+        self.prefill = Some(hook);
         self
     }
     pub const fn when(mut self, predicate: Availability) -> Self {

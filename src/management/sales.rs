@@ -4,6 +4,9 @@
 use super::schema::*;
 use serde_json::{Value, json};
 
+#[path = "sales_workflows.rs"]
+mod workflows;
+
 const CLIENTS: Lookup = Lookup {
     path: "/v1/erp/clients",
     list_key: "items",
@@ -310,6 +313,18 @@ const OUTREACH_LIST_FIELDS: &[Field] = &[
 const CONTRACT_FIELDS: &[Field] = &[
     Field::text("contractNumber", "契約番号").required(),
     Field::text("title", "件名").required(),
+    Field::new(
+        "templateId",
+        "契約書のひな形",
+        InputKind::Reference(Lookup {
+            path: "/v1/erp/sales-contract-templates",
+            list_key: "items",
+            value_key: "id",
+            label_keys: &["name"],
+        }),
+    )
+    .empty(Empty::Null)
+    .help("空欄なら標準のひな形を使います。契約を有効にした後は変更できません。"),
     Field::new("clientId", "取引先", InputKind::Reference(CLIENTS)).empty(Empty::Null),
     Field::text("clientName", "契約先の名称").required(),
     Field::new("monthlyAmountYen", "月額（円）", InputKind::Integer)
@@ -419,22 +434,30 @@ pub const RESOURCES: &[Resource] = &[
         .edit(Mutation::new("営業リストを編集", "PATCH", "/v1/erp/sales-outreach/lists/{id}", OUTREACH_LIST_FIELDS))
         .route("sales-outreach"),
     Resource::new("quotations", "販売管理", "見積", "/v1/erp/quotations", "items")
+        .pagination(Pagination::Offset { limit: 100 })
         .title(&["quotationNumber", "clientName"])
         .subtitle(&["clientName", "@money:totalAmount"]).status("status").detail("/v1/erp/quotations/{id}", "")
         .fields(&[("見積番号・件名", "quotationNumber"), ("取引先", "clientName"), ("メール", "clientEmail"),
             ("小計", "@money:subtotalAmount"), ("税額", "@money:taxAmount"), ("合計", "@money:totalAmount"), ("通貨", "currency"),
-            ("有効期限", "validUntil")])
+            ("有効期限", "validUntil"), ("更新日時", "updatedAt")])
+        .read_lines(&[Field::new("items", "見積明細", InputKind::Lines(workflows::QUOTE_LINES))])
+        .create(Mutation::new("見積の下書きを作成", "POST", "/v1/erp/quotations", workflows::QUOTE_FIELDS)
+            .prefill(workflows::quote_prefill).prepare(workflows::prepare_quote_create).validate_response(workflows::quote_response)
+            .explain("円建ての見積下書きを作成します。帳票の宛先・明細・税額を確認してください。"))
+        .edit(Mutation::new("見積の下書きを編集", "PATCH", "/v1/erp/quotations/{id}", workflows::QUOTE_FIELDS)
+            .when(workflows::quote_editable).prefill(workflows::quote_prefill).prepare(workflows::prepare_quote_edit)
+            .execute(workflows::quote_patch).validate_response(workflows::quote_response)
+            .explain("下書きの明細・宛先・備考を編集します。帳票ひな形と既存の発行元情報は引き継ぎます。"))
         .actions(&[
-            Mutation::new("取引先を設定", "PATCH", "/v1/erp/quotations/{id}", &[
-                Field::new("clientId", "取引先", InputKind::Reference(CLIENTS)).required(),
-            ]).when(quote_is_draft),
-            Mutation::new("見積を発行", "PATCH", "/v1/erp/quotations/{id}", &[
-                Field::new("clientId", "取引先", InputKind::Reference(CLIENTS)).required(),
-            ]).when(quote_is_draft).prepare(issue_quote).explain("見積を発行済みにします。メールは送信しません。"),
+            Mutation::new("見積を発行", "PATCH", "/v1/erp/quotations/{id}", &[])
+                .when(workflows::quote_issuable).prepare(workflows::issue_quote).execute(workflows::quote_patch)
+                .validate_response(workflows::quote_response).explain("この宛先・明細で見積を発行済みにします。以降は明細を編集できません。メールは送信しません。"),
             Mutation::new("受注を作成", "POST", "/v1/erp/quotations/{id}/accept-order", &[])
-                .when(quote_can_accept).explain("この見積から受注を作成します。"),
+                .when(quote_can_accept).execute(workflows::quote_accept).validate_response(workflows::converted_order_response)
+                .explain("この見積の内容から受注を作成します。同じ見積に対応する受注はサーバーで一意に管理されます。"),
             Mutation::new("見積を取り消す", "PATCH", "/v1/erp/quotations/{id}", &[])
-                .when(quote_can_cancel).prepare(cancel_quote).destructive().explain("この見積を取消済みにします。"),
+                .when(workflows::quote_cancellable).prepare(workflows::cancel_quote).execute(workflows::quote_patch)
+                .validate_response(workflows::quote_response).destructive().explain("この見積を取消済みにします。履歴は残ります。"),
         ]).route("quotations"),
     Resource::new("orders", "販売管理", "受注", "/v1/erp/orders", "items")
         .pagination(Pagination::Offset { limit: 100 }).title(&["orderNumber", "clientName"])
@@ -442,25 +465,65 @@ pub const RESOURCES: &[Resource] = &[
         .fields(&[("受注番号", "orderNumber"), ("取引先", "clientName"), ("メール", "clientEmail"),
             ("小計", "@money:subtotalAmount"), ("税額", "@money:taxAmount"), ("合計", "@money:totalAmount"), ("通貨", "currency"),
             ("備考", "notes"), ("更新日時", "updatedAt")])
+        .read_lines(&[Field::new("items", "受注明細", InputKind::Lines(&[
+            Field::text("sku", "SKU"), Field::text("description", "品名・内容"),
+            Field::new("quantity", "数量", InputKind::Integer), Field::new("unitPrice", "単価", InputKind::Money),
+            Field::new("amount", "明細金額", InputKind::Money),
+        ]))])
+        .create(Mutation::new("受注を作成", "POST", "/v1/erp/orders", workflows::ORDER_CREATE_FIELDS)
+            .prepare(workflows::prepare_order_create).validate_response(workflows::order_response)
+            .explain("円建ての未確定受注を作成します。明細は保存後に変更できないため、数量・単価・税額を確認してください。"))
         .edit(Mutation::new("受注の備考を編集", "PATCH", "/v1/erp/orders/{id}", &[
             Field::new("notes", "備考", InputKind::Multiline).empty(Empty::Null),
-        ]))
+        ]).execute(workflows::order_patch).validate_response(workflows::order_response))
         .actions(&[
+            Mutation::new("受注を確定", "PATCH", "/v1/erp/orders/{id}", &[])
+                .when(workflows::order_pending).prepare(workflows::confirm_order).execute(workflows::order_patch)
+                .validate_response(workflows::order_response).explain("この受注を確定します。在庫の出庫は出荷時に処理されます。"),
+            Mutation::new("出荷済みにする", "PATCH", "/v1/erp/orders/{id}", &[])
+                .when(workflows::order_confirmed).prepare(workflows::ship_order).execute(workflows::order_patch)
+                .validate_response(workflows::order_response).explain("出荷済みにし、SKUに対応する在庫を出庫します。出荷後の訂正には返品手続きが必要です。"),
+            Mutation::new("受注を完了", "PATCH", "/v1/erp/orders/{id}", &[])
+                .when(workflows::order_shipped).prepare(workflows::complete_order).execute(workflows::order_patch)
+                .validate_response(workflows::order_response).explain("出荷済みの受注を完了にします。"),
             Mutation::new("請求書を作成", "POST", "/v1/erp/orders/{id}/convert-to-invoice", &[])
-                .when(order_can_invoice).explain("受注の内容から請求書を作成します。"),
+                .when(order_can_invoice).execute(workflows::order_invoice).explain("受注の内容から請求書を作成します。"),
             Mutation::new("受注を取り消す", "PATCH", "/v1/erp/orders/{id}", &[])
-                .when(order_can_cancel).prepare(cancel_order).destructive().explain("この受注を取消済みにします。"),
+                .when(workflows::order_cancellable).prepare(workflows::cancel_order).execute(workflows::order_patch)
+                .validate_response(workflows::order_response).destructive().explain("出庫・請求前の受注を取消済みにします。履歴は残ります。"),
+            Mutation::new("明細を訂正して新規作成", "POST", "/v1/erp/orders", workflows::ORDER_CREATE_FIELDS)
+                .when(workflows::order_recreatable).prefill(workflows::order_recreate_prefill).prepare(workflows::prepare_order_create)
+                .execute(workflows::order_recreate).validate_response(workflows::order_response)
+                .explain("取消済みの手動受注から明細を引き継いで、新しい未確定受注を作成します。元の受注の履歴は残ります。数量・単価・税額を確認してください。"),
         ]).route("orders"),
     Resource::new("sales-contracts", "販売管理", "販売契約", "/v1/erp/sales-contracts", "items")
         .pagination(Pagination::Offset { limit: 100 }).title(&["title", "contractNumber"])
         .subtitle(&["clientName", "monthlyAmountYen"]).status("status").detail("/v1/erp/sales-contracts/{id}", "")
         .fields(&[("契約番号", "contractNumber"), ("件名", "title"), ("取引先", "clientName"),
             ("月額（円）", "monthlyAmountYen"), ("請求周期", "billingCycle"), ("開始日", "startDate"),
-            ("終了日", "endDate"), ("条項", "terms"), ("備考", "notes")])
+            ("終了日", "endDate"), ("条項", "terms"), ("備考", "notes"), ("版", "aggregateRevision")])
         .create(Mutation::new("契約の下書きを追加", "POST", "/v1/erp/sales-contracts", CONTRACT_FIELDS)
-            .prepare(prepare_contract_create).explain("下書きとして保存します。契約の有効化や請求は行いません。"))
+            .prepare(prepare_contract_create).validate_response(workflows::contract_response)
+            .explain("下書きとして保存します。契約の有効化や請求は行いません。"))
         .edit(Mutation::new("契約の下書きを編集", "PUT", "/v1/erp/sales-contracts/{id}", CONTRACT_FIELDS)
-            .when(manual_contract_draft).prepare(prepare_contract_update))
+            .when(manual_contract_draft).prepare(prepare_contract_update).execute(workflows::contract_update)
+            .validate_response(workflows::contract_response))
+        .actions(&[
+            Mutation::new("契約を有効にする", "PUT", "/v1/erp/sales-contracts/{id}", &[])
+                .when(workflows::contract_draft).prepare(workflows::activate_contract).execute(workflows::contract_update)
+                .validate_response(workflows::contract_response)
+                .explain("この契約条件で有効にし、契約書の本文を固定します。下書きには戻せません。電子署名の送信や請求処理は別の操作です。"),
+            Mutation::new("契約を解約する", "PUT", "/v1/erp/sales-contracts/{id}", &[])
+                .when(workflows::contract_active).prepare(workflows::terminate_contract).execute(workflows::contract_update)
+                .validate_response(workflows::contract_response).destructive()
+                .explain("この契約を解約済みにします。契約内容と履歴は残ります。既に発行した請求書・決済は取り消しません。"),
+            Mutation::new("ひな形を再適用", "POST", "/v1/erp/sales-contracts/{id}/reapply-template", &[])
+                .when(workflows::contract_draft).execute(workflows::contract_reapply).validate_response(workflows::contract_response)
+                .explain("下書きの契約書本文を、現在のひな形の内容に更新します。契約条件と金額は保持します。"),
+            Mutation::new("契約の下書きを削除", "DELETE", "/v1/erp/sales-contracts/{id}", &[])
+                .when(workflows::contract_draft).execute(workflows::contract_delete).destructive()
+                .explain("この下書き契約を削除します。署名依頼などで使用されている契約はサーバーで拒否されます。"),
+        ])
         .route("sales-contracts"),
     Resource::new("contract-templates", "販売管理", "契約ひな形", "/v1/erp/sales-contract-templates", "items")
         .fields(&[("名称", "name"), ("本文", "body"), ("標準", "isDefault")])
@@ -1019,39 +1082,13 @@ fn waitlist_seatable(record: &Value) -> bool {
             .as_u64()
             .is_some_and(|n| n > 0)
 }
-fn quote_is_draft(record: &Value) -> bool {
-    status_is(record, "draft")
-}
 fn quote_can_accept(record: &Value) -> bool {
     status_is(record, "sent")
-}
-fn quote_can_cancel(record: &Value) -> bool {
-    status_is(record, "draft") || status_is(record, "sent")
 }
 fn status_is(record: &Value, value: &str) -> bool {
     record["status"]
         .as_str()
         .is_some_and(|s| s.eq_ignore_ascii_case(value))
-}
-fn issue_quote(body: &mut Value, _: &Value) -> Result<(), String> {
-    body["status"] = json!("Sent");
-    Ok(())
-}
-fn cancel_quote(body: &mut Value, _: &Value) -> Result<(), String> {
-    body["status"] = json!("Cancelled");
-    Ok(())
-}
-fn cancel_order(body: &mut Value, _: &Value) -> Result<(), String> {
-    body["status"] = json!("cancelled");
-    Ok(())
-}
-fn order_can_cancel(record: &Value) -> bool {
-    record["id"]
-        .as_str()
-        .is_some_and(|id| id.starts_with("ord_"))
-        && (status_is(record, "pending")
-            || status_is(record, "confirmed")
-            || status_is(record, "approval_needed"))
 }
 fn order_can_invoice(record: &Value) -> bool {
     (status_is(record, "confirmed")
@@ -1087,7 +1124,7 @@ fn manual_contract_draft(original: &Value) -> bool {
 }
 
 fn prepare_contract(body: &mut Value) -> Result<(), String> {
-    required_text(body, "contractNumber", "契約番号", 255)?;
+    required_text(body, "contractNumber", "契約番号", 64)?;
     required_text(body, "title", "件名", 255)?;
     required_text(body, "clientName", "契約先の名称", 255)?;
     nonnegative_integer(body, "monthlyAmountYen", true)?;
@@ -1138,7 +1175,9 @@ fn prepare_contract_create(body: &mut Value, _: &Value) -> Result<(), String> {
     body["status"] = json!("draft");
     body["sourceType"] = json!("manual");
     body["sourceId"] = Value::Null;
-    body["templateId"] = Value::Null;
+    if body.get("templateId").is_none() {
+        body["templateId"] = Value::Null;
+    }
     Ok(())
 }
 
@@ -1150,7 +1189,9 @@ fn prepare_contract_update(body: &mut Value, original: &Value) -> Result<(), Str
     body["status"] = json!("draft");
     body["sourceType"] = json!("manual");
     body["sourceId"] = original.get("sourceId").cloned().unwrap_or(Value::Null);
-    body["templateId"] = original.get("templateId").cloned().unwrap_or(Value::Null);
+    if body.get("templateId").is_none() {
+        body["templateId"] = original.get("templateId").cloned().unwrap_or(Value::Null);
+    }
     Ok(())
 }
 
@@ -1395,6 +1436,7 @@ mod tests {
             prepare_contract_update(&mut body, &json!({"status":"draft","sourceType":"quote"}))
                 .is_err()
         );
+        body.as_object_mut().unwrap().remove("templateId");
         prepare_contract_update(
             &mut body,
             &json!({"status":"draft","sourceType":"manual","templateId":"tpl_1"}),

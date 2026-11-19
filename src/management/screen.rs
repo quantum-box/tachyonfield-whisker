@@ -574,10 +574,15 @@ fn record_detail(data: Data) -> Element {
 #[component]
 fn edit_record(data: Data, operation: Mutation) -> Element {
     let original = signal(data.editing_original.get_untracked());
-    let initial = model::draft(operation.fields, &original.get_untracked());
+    let (initial, initial_error) = match model::mutation_draft(operation, &original.get_untracked())
+    {
+        Ok(initial) => (initial, String::new()),
+        Err(error) => (serde_json::json!({}), error),
+    };
+    let initial_error = signal(initial_error);
     let draft = signal(initial.clone());
     let initial = signal(initial);
-    let error = signal(String::new());
+    let error = signal(initial_error.get_untracked());
     let saving = signal(false);
     let discard = signal(false);
     let submitted = signal(None::<Value>);
@@ -595,6 +600,10 @@ fn edit_record(data: Data, operation: Mutation) -> Element {
     };
     let submit = move || {
         if saving.get_untracked() {
+            return;
+        }
+        if !initial_error.with_untracked(String::is_empty) {
+            error.set(initial_error.get_untracked());
             return;
         }
         if draft.with_untracked(|value| value["_nativeUploadsInFlight"].as_u64().unwrap_or(0) > 0) {

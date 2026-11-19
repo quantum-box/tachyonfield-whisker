@@ -3,7 +3,6 @@
 //! so asynchronous failures are exercised without contacting the Field API.
 
 use super::*;
-
 use crate::management::schema::{Choice, Field, InputKind, Lookup};
 use serde_json::json;
 use std::cell::RefCell;
@@ -912,6 +911,28 @@ fn idempotent_retry_allows_the_same_payload_but_blocks_changed_content() {
         ui.tap_nth("保存する", 1);
         assert!(ui.has_text("前の操作結果を確認できていません。内容を変えて再送する前に、一覧で登録結果を確認してください"));
         assert!(!ui.has_text("保存中…"));
+    });
+}
+
+#[test]
+fn metadata_prefill_failure_cannot_be_bypassed_by_typing_a_replacement() {
+    fn invalid_metadata(_: &Value) -> Result<Value, String> {
+        Err("保存済みの補足情報を読み取れません。読み直してください。".into())
+    }
+    with_ui(|ui| {
+        let operation = SAVE.prefill(invalid_metadata);
+        let original = json!({"id":"row-1", "name":"内部データを含む元の値"});
+        let data = data_fixture(FIXTURE.edit(operation), original.clone());
+        data.edit.set(Some(operation));
+        ui.mount(render! { EditRecord(data: data, operation: operation) });
+        assert!(ui.has_text("保存済みの補足情報を読み取れません。読み直してください。"));
+        ui.input("名称（必須）", "新しく入力しても保護する");
+        ui.tap_nth("保存する", 1);
+        assert!(!ui.has_text("保存中…"));
+        ui.drain_tasks();
+        assert!(!ui.has_text(api::EXPIRED));
+        assert_eq!(data.editing_original.get_untracked(), original);
+        assert!(data.edit.get_untracked().is_some());
     });
 }
 
