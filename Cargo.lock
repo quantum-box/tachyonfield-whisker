@@ -225,6 +225,7 @@ dependencies = [
  "field-glass",
  "futures-channel",
  "futures-util",
+ "getrandom",
  "security-framework",
  "serde",
  "serde_json",

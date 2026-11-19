@@ -18,6 +18,7 @@ mod cash_book_settings;
 mod cash_book_settings_screen;
 mod features;
 mod markdown;
+mod management;
 mod print;
 mod print_ui;
 mod receipt_ocr;
@@ -730,6 +731,7 @@ fn environment_label(environment: &str) -> &'static str {
 
 #[component]
 fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> Element {
+    management::provide_connection(token, tenant);
     // 裏のメニューで選んだ分野と、下のタブで開いているもの。
     let area = signal(0usize);
     let page = signal(Page::Feature(0));
@@ -904,6 +906,9 @@ fn home(token: RwSignal<Option<String>>, tenant: RwSignal<Option<Tenant>>) -> El
                     children: move |k: ReadSignal<(usize, usize)>| {
                         let (a, i) = k.get_untracked();
                         let feature = area_features(a)[i];
+                        if feature.path == features::MANAGEMENT.path {
+                            return render! { management::ManagementScreen(token: token, tenant: tenant) };
+                        }
                         if feature.path == features::REGISTER_COUNT.path {
                             return render! {
                                 register_count_screen::RegisterCountScreen(token: token, tenant: tenant)
@@ -1006,6 +1011,7 @@ fn choose_area(index: usize, area: RwSignal<usize>, page: RwSignal<Page>, open: 
 #[cfg(target_os = "ios")]
 fn feature_symbol(label: &str) -> &'static str {
     match label {
+        "管理メニュー" => "square.grid.2x2.fill",
         "案件" => "briefcase.fill",
         "見積" => "doc.plaintext.fill",
         "受注" => "cart.fill",
@@ -1693,6 +1699,9 @@ fn feature_list(
     back_label: &'static str,
     on_back: Callback<()>,
 ) -> Element {
+    if let Some(resource) = management::for_path(feature.path) {
+        return render! { management::ResourceEntry(token: token, tenant: tenant, resource: resource, back_label: back_label, on_back: on_back) };
+    }
     let query = signal(String::new());
     let items = signal(Vec::<Value>::new());
     let loading = signal(true);
@@ -2189,7 +2198,7 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                 each: move || numbered.get(),
                 key: |r: &(usize, String, String)| r.0,
                 children: move |r: ReadSignal<(usize, String, String)>| {
-                    let (index, label, value) = r.get_untracked();
+                    let index = r.get_untracked().0;
                     render! {
                         View(style: css!(display: Display::Flex, padding_left: px(16))) {
                             View(
@@ -2220,7 +2229,7 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                                 }),
                             ) {
                                 Text(
-                                    value: label,
+                                    value: computed(move || r.get().1),
                                     style: computed(move || if inline {
                                         css!(
                                             color: hex(LABEL),
@@ -2233,7 +2242,7 @@ fn info_group(rows: Signal<Vec<(String, String)>>, inline: bool) -> Element {
                                     }),
                                 )
                                 Text(
-                                    value: value,
+                                    value: computed(move || r.get().2),
                                     style: computed(move || if inline {
                                         css!(
                                             color: hex(SECONDARY_LABEL),
@@ -2621,18 +2630,19 @@ async fn authed<T: Send + 'static>(
     token: RwSignal<Option<String>>,
     call: impl Fn(&str) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
-    let access = token.get_untracked().unwrap_or_default();
+    let Some(access) = token.get_untracked() else { return Err(api::EXPIRED.into()); };
+    let original_access = access.clone();
+    // Capture the refresh token with the request. A pending request must never
+    // use credentials from a subsequent sign-in or restore a signed-out session.
+    let refresh_snapshot = storage::refresh_token();
     let (result, renewed) = run_blocking(move || match call(&access) {
         Err(error) if error == api::EXPIRED => {
-            let Some(refresh_token) = storage::refresh_token() else {
+            let Some(refresh_token) = refresh_snapshot else {
                 return (Err(error), None);
             };
             match api::refresh(&refresh_token) {
                 Ok(session) => {
-                    if let Some(rotated) = &session.refresh_token {
-                        storage::save_refresh_token(rotated);
-                    }
-                    (call(&session.access_token), Some(session.access_token))
+                    (call(&session.access_token), Some(session))
                 }
                 Err(error) => (Err(error), None),
             }
@@ -2640,8 +2650,11 @@ async fn authed<T: Send + 'static>(
         other => (other, None),
     })
     .await;
-    if let Some(access_token) = renewed {
-        token.set(Some(access_token));
+    if let Some(session) = renewed {
+        if token.try_get_untracked().flatten().as_deref() == Some(original_access.as_str()) {
+            if let Some(rotated) = &session.refresh_token { storage::save_refresh_token(rotated); }
+            token.try_set(Some(session.access_token));
+        }
     }
     result
 }

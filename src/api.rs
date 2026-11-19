@@ -331,6 +331,39 @@ pub fn fetch_record(token: &str, tenant: &Tenant, path: &str) -> Result<Value, S
         .map_err(|e| format!("応答を読めません: {e}"))
 }
 
+/// A missing optional configuration is distinct from every other read failure.
+pub fn fetch_optional_record(token: &str, tenant: &Tenant, path: &str) -> Result<Option<Value>, String> {
+    match field_request("GET", path, token, &tenant.id, &tenant.platform_id).call() {
+        Ok(response) => response.into_json().map(Some).map_err(|e| format!("応答を読めません: {e}")),
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(error) => Err(describe_error(error)),
+    }
+}
+
+/// Native management writes. A successful 204/empty response is still a success.
+/// The caller keeps the same idempotency key across token refreshes and retries.
+pub fn mutate_record(
+    token: &str,
+    tenant: &Tenant,
+    method: &str,
+    path: &str,
+    body: &Value,
+    idempotency_key: Option<&str>,
+) -> Result<Value, String> {
+    if !matches!(method, "POST" | "PUT" | "PATCH" | "DELETE")
+        || !path.starts_with('/') || path.starts_with("//") {
+        return Err("操作の接続先を確認できません".into());
+    }
+    let mut request = field_request(method, path, token, &tenant.id, &tenant.platform_id)
+        .set("Content-Type", "application/json");
+    if let Some(key) = idempotency_key { request = request.set("Idempotency-Key", key); }
+    let response = request.send_json(body.clone()).map_err(describe_error)?;
+    if response.status() == 204 { return Ok(Value::Null); }
+    let text = response.into_string().map_err(|_| "保存の応答を確認できませんでした。一覧を読み直してください".to_owned())?;
+    if text.trim().is_empty() { return Ok(Value::Null); }
+    serde_json::from_str(&text).map_err(|_| "保存の応答を確認できませんでした。一覧を読み直してください".into())
+}
+
 /// 戦略の読み込みの待ち時間。Web 版と同じく、外（Linear・Library）からの補完を含めて 55 秒まで待つ。
 const STRATEGY_TIMEOUT: Duration = Duration::from_secs(55);
 /// 戦略を続きのページまで読む上限。
@@ -683,6 +716,120 @@ pub fn upload_receipt(
         .map_err(|e| format!("応答を読めません: {e}"))
 }
 
+/// The attendance import contract uses scalar form parts and one CSV file.
+pub fn upload_management_csv(
+    token: &str,
+    tenant: &Tenant,
+    path: &str,
+    fields: &Value,
+    name: &str,
+    bytes: &[u8],
+) -> Result<Value, String> {
+    if !matches!(
+        path,
+        "/v1/erp/hrm/attendance-sources/jobcan/csv-imports"
+            | "/v1/erp/hrm/attendance-sources/jobcan/csv-imports/preview"
+    ) {
+        return Err("取込先を確認できません".into());
+    }
+    upload_management_file(
+        token,
+        tenant,
+        path,
+        fields,
+        name,
+        "text/csv",
+        bytes,
+        Duration::from_secs(120),
+    )
+}
+
+fn upload_management_file(
+    token: &str,
+    tenant: &Tenant,
+    path: &str,
+    fields: &Value,
+    name: &str,
+    content_type: &str,
+    bytes: &[u8],
+    timeout: Duration,
+) -> Result<Value, String> {
+    let mut random = [0_u8; 16];
+    getrandom::getrandom(&mut random).map_err(|_| "ファイル送信を準備できませんでした")?;
+    let boundary = format!(
+        "field-{}",
+        random
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    let mut body = Vec::with_capacity(bytes.len() + 2048);
+    for (key, value) in fields.as_object().ok_or("取込条件を確認してください")? {
+        if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err("取込条件の形式が不正です".into());
+        }
+        let value = value
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| value.to_string());
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{key}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    let name: String = name
+        .chars()
+        .filter(|c| !matches!(c, '"' | '\r' | '\n' | '\\'))
+        .collect();
+    body.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\nContent-Type: {content_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    field_request("POST", path, token, &tenant.id, &tenant.platform_id)
+        .timeout(timeout)
+        .set(
+            "Content-Type",
+            &format!("multipart/form-data; boundary={boundary}"),
+        )
+        .send_bytes(&body)
+        .map_err(describe_error)?
+        .into_json()
+        .map_err(|_| "ファイル送信の応答を読み取れませんでした".into())
+}
+
+/// A document is only extracted here. Saving the reviewed record is a separate action.
+pub fn extract_management_document(
+    token: &str,
+    tenant: &Tenant,
+    entity: &str,
+    schema: &Value,
+    name: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<Value, String> {
+    if entity != "quotation" {
+        return Err("この種類の書類取込には対応していません".into());
+    }
+    if !matches!(
+        content_type,
+        "image/jpeg" | "image/png" | "image/heic" | "image/heif" | "application/pdf"
+    ) {
+        return Err("写真またはPDFを選択してください".into());
+    }
+    let fields = json!({"schema": schema});
+    upload_management_file(
+        token,
+        tenant,
+        &format!("/v1/field/ocr/{entity}/draft"),
+        &fields,
+        name,
+        content_type,
+        bytes,
+        Duration::from_secs(90),
+    )
+}
+
 /// 証憑OCRの一覧（新しい順に 200 件まで）。`receipt_type` / `status` は空なら絞らない。
 pub fn search_receipts(
     token: &str,
@@ -966,7 +1113,7 @@ fn receipt_used(message: &str) -> Option<(String, String)> {
     valid.then(|| (receipt_id.to_owned(), date))
 }
 
-fn encode_query(value: &str) -> String {
+pub(crate) fn encode_query(value: &str) -> String {
     value
         .bytes()
         .map(|b| match b {

@@ -8,6 +8,9 @@ Liquid Glass, sheets) through the `glass/` (`field-glass`) Whisker module.
 - Switch companies from the sidebar (searchable sheet)
 - Areas in the sidebar decide the bottom tabs
 - Lists with search and pull to refresh
+- Searchable native management menus, typed forms, reference pickers and line items
+- Daily-report submission/review, store opening checks, attendance CSV preview/import,
+  accounting workflows, reports and analysis
 - Field Agent chat, streamed over SSE
 
 Licensed under the [MIT License](LICENSE).
@@ -24,6 +27,36 @@ whisker run android
 
 Run `whisker doctor` first to verify your toolchain is set up for each
 target.
+
+## Management coverage
+
+The native management screens are compared with the Field web app's 113 top-level
+menu entries. The [coverage matrix](docs/native-management-parity.md) records the
+implemented reads and writes and the remaining differences for every menu. Menu
+coverage does not mean that every web workflow, attachment type, export or external
+integration is implemented. The domain notes in `docs/` describe those boundaries.
+
+Existing sales and customer tabs open the same native management components as the
+management menu. The app keeps the dedicated strategy, cash-book, register-closing,
+receipt-OCR and Agent screens. Document picking and previews currently use the iOS
+`field-glass` components; their platform limits are called out in the UI.
+
+`src/management/schema.rs` describes verified API contracts. The domain catalogs
+provide explicit read fields, typed inputs, allowed state transitions and request
+builders. `model.rs`, `form.rs` and `screen.rs` share exact currency conversion,
+pagination, reference selection, optimistic versions, confirmations and duplicate
+submission handling. Specialized analysis and attendance-import screens handle
+workflows that need more than one request. The server remains authoritative for
+authorization and business-state validation.
+
+Run the contract, data-conversion and native component regressions with:
+
+```sh
+cargo test --locked
+```
+
+Pull-request CI runs these tests and an unsigned iOS Simulator build. Headless tests
+do not replace checking the app on an actual device with an authorized test tenant.
 
 ## Edit
 
