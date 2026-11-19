@@ -104,10 +104,10 @@ pub const CLIENTS: Feature = Feature {
 };
 pub const INQUIRIES: Feature = Feature {
     label: "お問い合わせ",
-    path: "/v1/erp/inquiries",
+    path: "/v1/erp/field-forms/inquiries",
     list_key: "items",
-    title: &["title", "subject", "publicQuestion", "kind"],
-    subtitle: &["kind", "createdAt"],
+    title: &["subject", "reference"],
+    subtitle: &["name", "createdAt"],
     trailing: Some("status"),
     avatar: false,
     color: GREEN,
@@ -239,8 +239,15 @@ impl Feature {
     }
 }
 
+/// Searchable native management catalog. Business modules keep their original tabs.
+pub const MANAGEMENT: Feature = Feature {
+    label: "管理メニュー", path: "screen:management", list_key: "", title: &[], subtitle: &[], trailing: None,
+    avatar: false, color: BLUE, detail_path: None,
+};
+
 /// メニュー画面のグループ。Web 版のメニューと同じ並び。
 pub const MENU: &[(&str, &[Feature])] = &[
+    ("管理メニュー", &[MANAGEMENT]),
     ("販売管理", &[DEALS, QUOTATIONS, ORDERS, SALES_CONTRACTS]),
     ("顧客管理", &[CLIENTS, CUSTOMERS, INQUIRIES]),
     ("予約・人事", &[RESERVATIONS, STAFF]),
@@ -497,7 +504,7 @@ fn money(value: &Value, currency: Option<&str>) -> Option<String> {
 }
 
 /// 通貨の小数の桁数（ISO 4217。Web 版の arApCurrencyMinorUnitExponent と同じ表）。
-fn minor_unit_digits(currency: &str) -> usize {
+pub(crate) fn minor_unit_digits(currency: &str) -> usize {
     const ZERO: &[&str] = &[
         "BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "UYI", "VND",
         "VUV", "XAF", "XOF", "XPF",

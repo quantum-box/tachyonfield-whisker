@@ -8,6 +8,13 @@ Liquid Glass, sheets) through the `glass/` (`field-glass`) Whisker module.
 - Switch companies from the sidebar (searchable sheet)
 - Areas in the sidebar decide the bottom tabs
 - Lists with search and pull to refresh
+- Searchable native management menus, typed forms, reference pickers and line items
+- Quotation and order entry, sales-contract lifecycle actions, invoice payment links,
+  PDF email delivery and cancellation with reversal review
+- Product stock receipts, issues and adjustments, location transfers, and stocktaking
+  from counted quantities through finalization
+- Daily-report submission/review, store opening checks, attendance CSV preview/import,
+  accounting workflows, reports and analysis
 - Field Agent chat, streamed over SSE
 
 Licensed under the [MIT License](LICENSE).
@@ -24,6 +31,47 @@ whisker run android
 
 Run `whisker doctor` first to verify your toolchain is set up for each
 target.
+
+## Management coverage
+
+The native management screens are compared with the Field web app's 113 top-level
+menu entries. The catalog has 155 screen definitions covering 110 of those menus;
+existing dedicated screens provide the remaining three. The
+[coverage matrix](docs/native-management-parity.md) lists the implemented reads,
+writes and remaining differences for every menu. Some menus provide read access
+while specialized operations, exports or external integrations remain unfinished.
+
+The [sales and workforce notes](docs/native-management-sales.md),
+[inventory and accounting notes](docs/native-management-operations.md),
+[invoice delivery and cancellation notes](docs/native-management-invoices.md) and
+[analysis notes](docs/native-management-analytics.md) explain the supported workflows
+and their limits. Product stock and location stock use separate workflows. Invoice
+PDF delivery shows when sending can activate a draft sales contract, and invoice
+cancellation shows the reversal plan before execution.
+
+Existing sales and customer tabs open the same native management components as the
+management menu. The app keeps the dedicated strategy, cash-book, register-closing,
+receipt-OCR and Agent screens. Document picking and previews currently use the iOS
+`field-glass` components; their platform limits are called out in the UI.
+
+`src/management/schema.rs` describes verified API contracts. The domain catalogs
+provide explicit read fields, typed inputs, allowed state transitions and request
+builders. `model.rs`, `form.rs` and `screen.rs` share exact currency conversion,
+pagination, reference selection, optimistic versions, confirmations and duplicate
+submission handling. Inventory and invoice workflow adapters add verified commands
+to their existing catalog entries; coverage is counted after those adapters run.
+Specialized analysis and attendance-import screens handle
+workflows that need more than one request. The server remains authoritative for
+authorization and business-state validation.
+
+Run the contract, data-conversion and native component regressions with:
+
+```sh
+cargo test --locked
+```
+
+Pull-request CI runs these tests and an unsigned iOS Simulator build. Headless tests
+do not replace checking the app on an actual device with an authorized test tenant.
 
 ## Edit
 
