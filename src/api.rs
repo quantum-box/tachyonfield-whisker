@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+mod reservation_csv;
+pub use reservation_csv::export_reservations_csv;
+
 /// Web クライアント（apps/client/src/platform/auth/auth-config.ts）と同じ公開クライアント。
 const COGNITO_ENDPOINT: &str = "https://cognito-idp.ap-northeast-1.amazonaws.com/";
 const COGNITO_CLIENT_ID: &str = "5n3h0du82ll3t02m99gnr8qj27";

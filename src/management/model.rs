@@ -187,6 +187,33 @@ fn money_to_minor(text: &str, currency: &str) -> Result<Value, String> {
 }
 
 pub fn display_field(resource: Resource, row: &Value, key: &str) -> String {
+    if matches!(resource.key, "reservations" | "reservation-waitlist") {
+        if matches!(key, "status" | "paymentStatus" | "previousStatus") {
+            return crate::features::status_label(&input_text(value_at(row, key)));
+        }
+        if matches!(
+            key,
+            "startsAt"
+                | "endsAt"
+                | "desiredStartsAt"
+                | "desiredEndsAt"
+                | "createdAt"
+                | "updatedAt"
+                | "cancelledAt"
+                | "closedAt"
+                | "enqueuedAt"
+        ) {
+            if let Some(time) = value_at(row, key)
+                .as_str()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+            {
+                return time
+                    .with_timezone(&FixedOffset::east_opt(9 * 3600).unwrap())
+                    .format("%Y-%m-%d %H:%M（日本時間）")
+                    .to_string();
+            }
+        }
+    }
     if let Some(key) = key
         .strip_prefix("@money:")
         .or_else(|| key.ends_with("Minor").then_some(key))

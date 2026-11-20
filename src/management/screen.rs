@@ -16,6 +16,9 @@ use whisker::Owner;
 #[path = "ui_tests.rs"]
 mod ui_tests;
 
+#[path = "reservation_screen.rs"]
+mod reservation_screen;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Connection {
     token: RwSignal<Option<String>>,
@@ -262,6 +265,8 @@ struct Data {
     detail_generation: RwSignal<u64>,
     edit: RwSignal<Option<Mutation>>,
     editing_original: RwSignal<Value>,
+    edit_seed: RwSignal<Option<Value>>,
+    related: RwSignal<Option<(Resource, Value)>>,
     owner: Option<Owner>,
 }
 
@@ -332,7 +337,15 @@ impl Data {
         self.detail_loading.set(true);
         spawn_in(self.owner, async move {
             let result = authed(self.connection.token, move |token| {
-                api::fetch_record(token, &current, &path)
+                let response = api::fetch_record(token, &current, &path)?;
+                let value = model::value_at(&response, self.resource.detail_key).clone();
+                if !value.is_object() {
+                    return Err("詳細の応答を読み取れませんでした".into());
+                }
+                match self.resource.detail_enrichment {
+                    Some(enrich) => enrich(token, &current, &value),
+                    None => Ok(value),
+                }
             })
             .await;
             if !self.owner.is_none_or(Owner::is_alive)
@@ -348,7 +361,6 @@ impl Data {
             self.detail_loading.set(false);
             match result {
                 Ok(value) => {
-                    let value = model::value_at(&value, self.resource.detail_key).clone();
                     if !value.is_object() {
                         self.detail_error
                             .set("詳細の応答を読み取れませんでした".into());
@@ -370,6 +382,7 @@ impl Data {
     fn can_mutate(self, operation: Mutation, original: &Value) -> bool {
         self.connection.allowed(self.resource)
             && self.loaded.get()
+            && !self.loading.get()
             && self.error.with(String::is_empty)
             && self
                 .collection
@@ -381,7 +394,22 @@ impl Data {
             return;
         }
         self.editing_original.set(original);
+        self.edit_seed.set(None);
         self.edit.set(Some(operation));
+    }
+
+    fn begin_prefilled(self, operation: Mutation, seed: Value) {
+        self.begin(operation, Value::Null);
+        self.edit_seed.set(Some(seed));
+    }
+
+    fn open_related(self, key: &str, row: Value) {
+        if let Some(resource) = resources()
+            .into_iter()
+            .find(|r| r.key == key && self.connection.allowed(*r))
+        {
+            self.related.set(Some((resource, row)));
+        }
     }
 }
 
@@ -401,6 +429,32 @@ fn resource_screen(
     back_label: &'static str,
     on_back: Callback<()>,
 ) -> Element {
+    resource_screen_with_row(connection, resource, back_label, on_back, None)
+}
+
+#[component]
+fn related_resource_screen(
+    connection: Connection,
+    resource: Resource,
+    row: Value,
+    on_back: Callback<()>,
+) -> Element {
+    resource_screen_with_row(
+        connection,
+        resource,
+        "予約に戻る",
+        on_back,
+        Some(row.clone()),
+    )
+}
+
+fn resource_screen_with_row(
+    connection: Connection,
+    resource: Resource,
+    back_label: &'static str,
+    on_back: Callback<()>,
+    initial_row: Option<Value>,
+) -> Element {
     if let Some(view) = crate::management::analytics_screen::custom_screen(
         resource,
         connection.token,
@@ -414,7 +468,24 @@ fn resource_screen(
         resource,
         connection,
         collection: signal(model::Collection::default()),
-        filters: signal(model::draft(resource.filters, &Value::Null)),
+        filters: signal({
+            let mut filters = model::draft(resource.filters, &Value::Null);
+            if resource.key == "reservations" {
+                let today = model::expanded_default("@today");
+                if let Ok((from, to)) = crate::management::reservation_slots::utc_date_range(
+                    &today,
+                    &today,
+                    "Asia/Tokyo",
+                ) {
+                    filters["from"] = serde_json::json!(from);
+                    filters["to"] = serde_json::json!(to);
+                }
+            }
+            if matches!(resource.key, "reservations" | "reservation-waitlist") {
+                reservation_screen::japanese_datetimes(resource.filters, &mut filters);
+            }
+            filters
+        }),
         loading: signal(false),
         loaded: signal(false),
         error: signal(String::new()),
@@ -427,6 +498,8 @@ fn resource_screen(
         detail_generation: signal(0),
         edit: signal(None),
         editing_original: signal(Value::Null),
+        edit_seed: signal(None),
+        related: signal(None),
         owner: Owner::current(),
     };
     let query = signal(String::new());
@@ -441,6 +514,9 @@ fn resource_screen(
     if !filter_open.get_untracked() {
         data.load();
     }
+    if let Some(row) = initial_row.filter(|row| !row.is_null()) {
+        data.open(row);
+    }
     let visible = computed(move || {
         let query = query.get().trim().to_lowercase();
         data.collection.with(|c| {
@@ -448,7 +524,8 @@ fn resource_screen(
                 .iter()
                 .enumerate()
                 .filter(|(_, row)| {
-                    query.is_empty()
+                    resource.key == "reservations"
+                        || query.is_empty()
                         || format!(
                             "{} {} {}",
                             model::title(resource, row),
@@ -464,20 +541,29 @@ fn resource_screen(
     });
     render! {
         View(style: screen_style()) {
-            Show(when: move || data.selected.with(Option::is_none) && data.edit.with(Option::is_none)) {
+            Show(when: move || data.selected.with(Option::is_none) && data.edit.with(Option::is_none) && data.related.with(Option::is_none)) {
                 View(style: screen_style()) {
                     NavBar(title: resource.label, back_label: back_label, on_back: on_back, action_label: "", on_action: |_| {})
                     ScrollView(style: scroll_style()) {
                         View(style: scroll_content_style()) {
                             RefreshControl(refreshing: computed(move || data.loading.get()), on_refresh: move |_| data.load())
-                            View(style: css!(padding: (px(8), px(16)))) {
+                            Show(when: move || resource.key == "reservations") { reservation_screen::ReservationToolbar(data: data) }
+                            Show(when: move || resource.key.starts_with("reservation-") && resource.key != "reservation-waitlist") { reservation_screen::ReservationSettingsLinks(data: data) }
+                            Show(when: move || resource.key != "reservations") { View(style: css!(padding: (px(8), px(16)))) {
                                 Input(text: query, placeholder: "読み込んだ項目を検索", auto_capitalize: AutoCapitalize::None, style: computed(move || css!(height: px(42), background_color: hex(FILL), color: hex(LABEL), font_size: px(17), padding: px(10), border_radius: px(10))))
+                            } }
+                            Show(when: move || resource.key == "reservations") {
+                                View(style: css!(padding: (px(8), px(16)))) {
+                                    Input(text: query, placeholder: "氏名・予約番号・連絡先を検索", auto_capitalize: AutoCapitalize::None, style: computed(move || css!(height: px(42), background_color: hex(FILL), color: hex(LABEL), font_size: px(17), padding: px(10), border_radius: px(10))))
+                                }
+                                ActionButton(label: "予約を検索", destructive: false, on_tap: move |_| { data.filters.update(|v| v["search"] = serde_json::json!(query.get_untracked().trim())); data.load(); })
+                                Show(when: move || !query.with(String::is_empty)) { ActionButton(label: "検索をクリア", destructive: false, on_tap: move |_| { query.set(String::new()); data.filters.update(|v| v["search"] = serde_json::json!("")); data.load(); }) }
                             }
                             Show(when: move || !resource.filters.is_empty()) {
                                 ActionButton(label: "絞り込み条件", destructive: false, on_tap: move |_| filter_open.update(|v| *v = !*v))
                                 Show(when: move || filter_open.get()) {
                                     View(style: computed(move || group_style())) {
-                                        InputFields(fields: resource.filters.to_vec(), draft: data.filters, prefix: String::new(), token: connection.token, tenant: connection.tenant)
+                                        InputFields(fields: resource.filters.iter().filter(|f| resource.key != "reservations" || f.key != "search").copied().collect::<Vec<_>>(), draft: data.filters, prefix: String::new(), token: connection.token, tenant: connection.tenant)
                                         ActionButton(label: "この条件で表示", destructive: false, on_tap: move |_| { if model::query_path(resource.path, resource.filters, &data.filters.get_untracked()).is_ok() { filter_open.set(false); } data.load(); })
                                     }
                                 }
@@ -522,12 +608,16 @@ fn resource_screen(
                     }
                 }
             }
-            Show(when: move || data.selected.with(Option::is_some) && data.edit.with(Option::is_none)) { RecordDetail(data: data) }
+            Show(when: move || data.selected.with(Option::is_some) && data.edit.with(Option::is_none) && data.related.with(Option::is_none)) { RecordDetail(data: data) }
             ForEach(
                 each: move || data.edit.get().into_iter().collect::<Vec<_>>(),
                 key: |operation: &Mutation| (operation.method, operation.path, operation.label),
                 children: move |operation: ReadSignal<Mutation>| render! { EditRecord(data: data, operation: operation.get_untracked()) },
             )
+            ForEach(each: move || data.related.get().into_iter().collect::<Vec<_>>(), key: |target: &(Resource, Value)| format!("{}:{}", target.0.key, record_key(target.0, &target.1)), children: move |target: ReadSignal<(Resource, Value)>| {
+                let (resource, row) = target.get_untracked();
+                render! { RelatedResourceScreen(connection: connection, resource: resource, row: row, on_back: move |_| { data.related.set(None); data.load(); }) }
+            })
         }
     }
 }
@@ -553,6 +643,10 @@ fn record_detail(data: Data) -> Element {
                         model::detail_rows(resource, &selected.get()).into_iter().filter(|(label, _)| !labels.contains(&label.as_str())).collect::<Vec<_>>()
                     }), inline: false)
                     RecordLines(resource: resource, record: selected, token: data.connection.token, tenant: data.connection.tenant)
+                    Show(when: move || data.detail_ready.get() && matches!(resource.key, "reservations" | "reservation-waitlist")) {
+                        reservation_screen::ReservationDetailPanel(data: data, record: selected)
+                        reservation_screen::HandoffPanel(data: data, record: selected)
+                    }
                     Show(when: move || data.detail_ready.get() && resource.edit.is_some_and(|op| data.can_mutate(op, &selected.get()))) {
                         ActionButton(label: "編集", destructive: false, on_tap: move |_| { if let Some(operation) = resource.edit { data.begin(operation, selected.get_untracked()); } })
                     }
@@ -574,11 +668,22 @@ fn record_detail(data: Data) -> Element {
 #[component]
 fn edit_record(data: Data, operation: Mutation) -> Element {
     let original = signal(data.editing_original.get_untracked());
-    let (initial, initial_error) = match model::mutation_draft(operation, &original.get_untracked())
-    {
-        Ok(initial) => (initial, String::new()),
-        Err(error) => (serde_json::json!({}), error),
-    };
+    let (mut initial, initial_error) =
+        match model::mutation_draft(operation, &original.get_untracked()) {
+            Ok(initial) => (initial, String::new()),
+            Err(error) => (serde_json::json!({}), error),
+        };
+    if let Some(seed) = data.edit_seed.get_untracked() {
+        for field in operation.fields {
+            let value = model::value_at(&seed, field.key);
+            if !value.is_null() {
+                model::set_at(&mut initial, field.key, value.clone());
+            }
+        }
+    }
+    if matches!(data.resource.key, "reservations" | "reservation-waitlist") {
+        reservation_screen::japanese_datetimes(operation.fields, &mut initial);
+    }
     let initial_error = signal(initial_error);
     let draft = signal(initial.clone());
     let initial = signal(initial);
@@ -680,11 +785,17 @@ fn edit_record(data: Data, operation: Mutation) -> Element {
         let context = current.clone();
         let request_key = key.get_untracked();
         let original_to_send = original.get_untracked();
+        let dispatched = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let request_dispatched = dispatched.clone();
         submitted.set(Some(body.clone()));
         saving.set(true);
         error.set(String::new());
         spawn_in(owner, async move {
             let result = authed(data.connection.token, move |token| {
+                if let Some(preflight) = operation.preflight {
+                    preflight(token, &current, &body, &original_to_send)?;
+                }
+                request_dispatched.store(true, std::sync::atomic::Ordering::Relaxed);
                 let value = if let Some(executor) = operation.executor {
                     executor(token, &current, &body, &original_to_send)?
                 } else {
@@ -711,29 +822,53 @@ fn edit_record(data: Data, operation: Mutation) -> Element {
             }
             saving.set(false);
             match result {
-                Ok(_) => {
-                    data.notice.set(format!(
-                        "{}しました",
-                        if operation.method == "DELETE" {
-                            "削除"
-                        } else {
-                            "保存"
-                        }
-                    ));
+                Ok(value) => {
+                    data.notice.set(
+                        operation
+                            .success_message
+                            .map(|message| message(&value))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "{}しました",
+                                    if operation.method == "DELETE" {
+                                        "削除"
+                                    } else {
+                                        "保存"
+                                    }
+                                )
+                            }),
+                    );
                     data.selected.set(None);
                     data.edit.set(None);
                     data.load();
+                    if let Some(record) = operation.result_record.and_then(|record| record(&value))
+                    {
+                        data.open(record);
+                    }
+                    if data.resource.key == "reservation-waitlist" {
+                        if let Some(record) =
+                            crate::management::reservation_waitlist::converted_record(&value)
+                        {
+                            data.open_related("reservations", record);
+                        }
+                    }
                 }
                 Err(message) => {
                     // Validation/authorization rejections cannot have committed a mutation.
-                    if message.contains("（400）")
-                        || message.contains("（403）")
-                        || message.contains("（422）")
-                        || message == "この操作の権限がありません"
+                    let reservation_command =
+                        matches!(data.resource.key, "reservations" | "reservation-waitlist");
+                    // Reservation cancellation can commit its history before a
+                    // provider/configuration failure, including an HTTP 400.
+                    if !dispatched.load(std::sync::atomic::Ordering::Relaxed)
+                        || (!reservation_command
+                            && (message.contains("（400）")
+                                || message.contains("（403）")
+                                || message.contains("（422）")
+                                || message == "この操作の権限がありません"))
                     {
                         submitted.set(None);
                     }
-                    error.set(if message.contains("（409）") { "別の更新または同じ操作が先に保存されています。一覧を読み直して内容を確認してください".into() } else { message });
+                    error.set(if message.contains("（409）") && !data.resource.key.starts_with("reservation") { "別の更新または同じ操作が先に保存されています。一覧を読み直して内容を確認してください".into() } else { message });
                 }
             }
         });
@@ -749,10 +884,23 @@ fn edit_record(data: Data, operation: Mutation) -> Element {
                     Show(when: move || !saving.get()) {
                         DocumentInput(operation: operation, draft: draft, token: data.connection.token, tenant: data.connection.tenant)
                         View(style: computed(move || group_style())) {
-                            InputFields(fields: operation.fields.to_vec(), draft: draft, prefix: String::new(), token: data.connection.token, tenant: data.connection.tenant)
+                            reservation_screen::ReservationForm(data: data, operation: operation, draft: draft, original: original)
                         }
                     }
                     Show(when: move || !error.with(String::is_empty)) { ErrorNotice(message: computed(move || error.get())) }
+                    Show(when: move || !saving.get() && !error.with(String::is_empty) && matches!(data.resource.key,"reservations" | "reservation-waitlist")) {
+                        Show(when: move || !original.with(Value::is_null)) {
+                            ActionButton(label: "対象と履歴を読み直して確認", destructive: false, on_tap: move |_| {
+                                data.edit.set(None); data.open(original.get_untracked()); data.load();
+                            })
+                        }
+                        Show(when: move || original.with(Value::is_null)) {
+                            ActionButton(label: "一覧を読み直して登録結果を確認", destructive: false, on_tap: move |_| {
+                                data.edit.set(None); data.selected.set(None);
+                                data.filters.set(model::draft(data.resource.filters,&Value::Null)); data.load();
+                            })
+                        }
+                    }
                     Show(when: move || saving.get()) { Notice(message: "保存中…") }
                     Show(when: move || !saving.get()) { ActionButton(label: operation.label, destructive: operation.destructive, on_tap: move |_| submit()) }
                     Show(when: move || discard.get()) {

@@ -101,6 +101,27 @@ public final class GlassModule: Module {
                 }
                 Events("done")
             }
+            View("field-glass:CsvExportButton", FieldCsvExportButtonView.self) {
+                Prop("label") { (view: FieldCsvExportButtonView, value: WhiskerValue) in
+                    view.setLabel(value.asString ?? "")
+                }
+                Prop("csv") { (view: FieldCsvExportButtonView, value: WhiskerValue) in
+                    view.setCsv(value.asString ?? "")
+                }
+                Prop("name") { (view: FieldCsvExportButtonView, value: WhiskerValue) in
+                    view.setName(value.asString ?? "")
+                }
+                Events("done")
+            }
+            View("field-glass:PaymentLinkButton", FieldPaymentLinkButtonView.self) {
+                Prop("label") { (view: FieldPaymentLinkButtonView, value: WhiskerValue) in
+                    view.setLabel(value.asString ?? "")
+                }
+                Prop("url") { (view: FieldPaymentLinkButtonView, value: WhiskerValue) in
+                    view.setUrl(value.asString ?? "")
+                }
+                Events("done")
+            }
             View("field-glass:DocumentPreview", FieldDocumentPreviewView.self) {
                 Prop("url") { (view: FieldDocumentPreviewView, value: WhiskerValue) in
                     view.setUrl(value.asString ?? "")

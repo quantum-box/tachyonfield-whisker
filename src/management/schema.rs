@@ -27,6 +27,12 @@ pub enum InputKind {
     DateTime,
     Select(&'static [Choice]),
     Reference(Lookup),
+    /// Scoped candidates loaded with this record, retained in a hidden draft field.
+    RecordReference {
+        rows_key: &'static str,
+        value_key: &'static str,
+        label_keys: &'static [&'static str],
+    },
     /// Lookup rows are parents; choose from the selected parent's child array.
     DependentReference {
         lookup: Lookup,
@@ -126,8 +132,11 @@ pub type Availability = fn(&Value) -> bool;
 pub type ResponseCheck = fn(&Value) -> Result<(), String>;
 /// A verified, read-only aggregate. Its JSON is interpreted using `list_key`.
 pub type CollectionLoader = fn(&str, &crate::api::Tenant, &Value) -> Result<Value, String>;
+/// Adds verified, read-only context after loading the authoritative detail record.
+pub type DetailEnrichment = fn(&str, &crate::api::Tenant, &Value) -> Result<Value, String>;
 /// A verified business command that needs a fresh preflight or a multi-step API contract.
 pub type MutationExecutor = fn(&str, &crate::api::Tenant, &Value, &Value) -> Result<Value, String>;
+pub type MutationPreflight = fn(&str, &crate::api::Tenant, &Value, &Value) -> Result<(), String>;
 #[derive(Clone, Copy, Debug)]
 pub struct DocumentPrefill {
     pub entity: &'static str,
@@ -164,6 +173,11 @@ pub struct Mutation {
     pub actor_body_field: Option<&'static str>,
     pub response_check: Option<ResponseCheck>,
     pub executor: Option<MutationExecutor>,
+    /// A fresh read before dispatch; the shared executor retains its retry header.
+    pub preflight: Option<MutationPreflight>,
+    pub success_message: Option<fn(&Value) -> String>,
+    /// A record of this resource to open after a successful save.
+    pub result_record: Option<fn(&Value) -> Option<Value>>,
     pub document: Option<DocumentPrefill>,
 }
 
@@ -191,6 +205,9 @@ impl Mutation {
             actor_body_field: None,
             response_check: None,
             executor: None,
+            preflight: None,
+            success_message: None,
+            result_record: None,
             document: None,
         }
     }
@@ -246,6 +263,18 @@ impl Mutation {
         self.executor = Some(executor);
         self
     }
+    pub const fn preflight(mut self, check: MutationPreflight) -> Self {
+        self.preflight = Some(check);
+        self
+    }
+    pub const fn success_message(mut self, message: fn(&Value) -> String) -> Self {
+        self.success_message = Some(message);
+        self
+    }
+    pub const fn result_record(mut self, record: fn(&Value) -> Option<Value>) -> Self {
+        self.result_record = Some(record);
+        self
+    }
     pub const fn document(mut self, prefill: DocumentPrefill) -> Self {
         self.document = Some(prefill);
         self
@@ -284,6 +313,7 @@ pub struct Resource {
     pub status: Option<&'static str>,
     pub detail_path: Option<&'static str>,
     pub detail_key: &'static str,
+    pub detail_enrichment: Option<DetailEnrichment>,
     /// Only these fields appear in detail (Japanese label, dotted read path).
     pub detail_fields: &'static [(&'static str, &'static str)],
     /// Read-only arrays displayed as labelled lines, independently of editable fields.
@@ -329,6 +359,7 @@ impl Resource {
             status: None,
             detail_path: None,
             detail_key: "",
+            detail_enrichment: None,
             detail_fields: &[],
             read_lines: &[],
             loader: None,
@@ -368,6 +399,10 @@ impl Resource {
     }
     pub const fn fields(mut self, fields: &'static [(&'static str, &'static str)]) -> Self {
         self.detail_fields = fields;
+        self
+    }
+    pub const fn detail_enrichment(mut self, loader: DetailEnrichment) -> Self {
+        self.detail_enrichment = Some(loader);
         self
     }
     pub const fn read_lines(mut self, fields: &'static [Field]) -> Self {

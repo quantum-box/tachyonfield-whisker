@@ -1,6 +1,6 @@
 //! Headless native UI regressions. The renderer records the live tree and fires
-//! the same input/tap callbacks as the native host. No test has an access token,
-//! so asynchronous failures are exercised without contacting the Field API.
+//! the same input/tap callbacks as the native host. Tests use no credentials;
+//! explicit failing executors exercise dispatch without contacting the Field API.
 
 use super::*;
 use crate::management::schema::{Choice, Field, InputKind, Lookup};
@@ -274,6 +274,15 @@ impl Ui {
         run_until_stalled();
         flush();
     }
+
+    fn wait_for_text(&self, text: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !self.has_text(text) && std::time::Instant::now() < deadline {
+            self.drain_tasks();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(self.has_text(text), "missing {text}: {:?}", self.texts());
+    }
 }
 
 fn with_ui(test: impl FnOnce(&Ui)) {
@@ -345,6 +354,8 @@ fn data_fixture(resource: Resource, original: Value) -> Data {
         detail_ready: signal(true),
         edit: signal(None),
         editing_original: signal(original),
+        edit_seed: signal(None),
+        related: signal(None),
         owner: Owner::current(),
     }
 }
@@ -861,18 +872,24 @@ fn report_exclusions_and_currency_notices_are_visible_and_update_with_the_collec
 
 #[test]
 fn failed_write_keeps_the_draft_and_blocks_an_ambiguous_non_idempotent_retry() {
+    fn uncertain(_: &str, _: &Tenant, _: &Value, _: &Value) -> Result<Value, String> {
+        Err("送信後に通信が切れました（fixture）".into())
+    }
     with_ui(|ui| {
+        let operation = SAVE.execute(uncertain);
         let data = data_fixture(FIXTURE, json!({"id":"row-1","name":""}));
-        data.edit.set(Some(SAVE));
-        ui.mount(render! { EditRecord(data: data, operation: SAVE) });
+        data.connection
+            .token
+            .set(Some("fixture-executor-only".into()));
+        data.edit.set(Some(operation));
+        ui.mount(render! { EditRecord(data: data, operation: operation) });
         ui.tap_nth("保存する", 1);
         assert!(ui.has_text("名称を入力してください"));
         assert!(!ui.has_text("保存中…"));
         ui.input("名称（必須）", "失敗後も残る入力");
         ui.tap_nth("保存する", 1);
         assert!(ui.has_text("保存中…"));
-        ui.drain_tasks();
-        assert!(ui.has_text(api::EXPIRED));
+        ui.wait_for_text("送信後に通信が切れました（fixture）");
         assert!(data.edit.get_untracked().is_some());
         ui.tap_nth("保存する", 1);
         assert!(
@@ -889,24 +906,29 @@ fn failed_write_keeps_the_draft_and_blocks_an_ambiguous_non_idempotent_retry() {
 
 #[test]
 fn idempotent_retry_allows_the_same_payload_but_blocks_changed_content() {
+    fn uncertain(_: &str, _: &Tenant, _: &Value, _: &Value) -> Result<Value, String> {
+        Err("送信後に通信が切れました（fixture）".into())
+    }
     with_ui(|ui| {
-        let operation = SAVE.idempotency_body("idempotencyKey");
+        let operation = SAVE.execute(uncertain).idempotency_body("idempotencyKey");
         let data = data_fixture(
             FIXTURE.edit(operation),
             json!({"id":"row-1","name":"元の値"}),
         );
+        data.connection
+            .token
+            .set(Some("fixture-executor-only".into()));
         data.edit.set(Some(operation));
         ui.mount(render! { EditRecord(data: data, operation: operation) });
         ui.input("名称（必須）", "同じ操作");
         ui.tap_nth("保存する", 1);
-        ui.drain_tasks();
-        assert!(ui.has_text(api::EXPIRED));
+        ui.wait_for_text("送信後に通信が切れました（fixture）");
         ui.tap_nth("保存する", 1);
         assert!(
             ui.has_text("保存中…"),
             "a matching idempotent retry must remain possible"
         );
-        ui.drain_tasks();
+        ui.wait_for_text("送信後に通信が切れました（fixture）");
         ui.input("名称（必須）", "別の操作");
         ui.tap_nth("保存する", 1);
         assert!(ui.has_text("前の操作結果を確認できていません。内容を変えて再送する前に、一覧で登録結果を確認してください"));
@@ -933,6 +955,248 @@ fn metadata_prefill_failure_cannot_be_bypassed_by_typing_a_replacement() {
         assert!(!ui.has_text(api::EXPIRED));
         assert_eq!(data.editing_original.get_untracked(), original);
         assert!(data.edit.get_untracked().is_some());
+    });
+}
+
+#[test]
+fn a_rejected_preflight_keeps_inputs_editable_without_dispatching_a_write() {
+    fn reject(_: &str, _: &Tenant, _: &Value, _: &Value) -> Result<(), String> {
+        Err("最新の予約枠を選び直してください（fixture）".into())
+    }
+    fn forbidden(_: &str, _: &Tenant, _: &Value, _: &Value) -> Result<Value, String> {
+        panic!("a failed preflight must never dispatch");
+    }
+    with_ui(|ui| {
+        let operation = SAVE.preflight(reject).execute(forbidden);
+        let data = data_fixture(
+            FIXTURE.edit(operation),
+            json!({"id":"row-1","name":"元の入力"}),
+        );
+        data.connection
+            .token
+            .set(Some("fixture-executor-only".into()));
+        data.edit.set(Some(operation));
+        ui.mount(render! { EditRecord(data: data, operation: operation) });
+        ui.tap_nth("保存する", 1);
+        ui.wait_for_text("最新の予約枠を選び直してください（fixture）");
+        ui.input("名称（必須）", "訂正した入力");
+        ui.tap_nth("保存する", 1);
+        assert!(ui.has_text("保存中…"));
+        ui.wait_for_text("最新の予約枠を選び直してください（fixture）");
+        assert!(
+            !ui.texts()
+                .iter()
+                .any(|text| text.contains("前の操作結果を確認できていません"))
+        );
+    });
+}
+
+#[test]
+fn cancellation_provider_400_preserves_the_sent_payload_and_offers_history_recovery() {
+    fn partial_failure(_: &str, _: &Tenant, _: &Value, _: &Value) -> Result<Value, String> {
+        Err("取消は記録済みですが、返金の設定を確認してください（400）".into())
+    }
+    with_ui(|ui| {
+        let operation = Mutation::new(
+            "取消を確定",
+            "POST",
+            "/v1/erp/reservations/{id}/cancel",
+            FORM_FIELDS,
+        )
+        .execute(partial_failure)
+        .idempotency_header();
+        let mut resource = FIXTURE.edit(operation);
+        resource.key = "reservations";
+        let data = data_fixture(resource, json!({"id":"rsv_fixture","name":"取消内容"}));
+        data.connection
+            .token
+            .set(Some("fixture-executor-only".into()));
+        data.edit.set(Some(operation));
+        ui.mount(render! { EditRecord(data:data,operation:operation) });
+        ui.tap_nth("取消を確定", 1);
+        ui.wait_for_text("取消は記録済みですが、返金の設定を確認してください（400）");
+        assert!(ui.has_text("対象と履歴を読み直して確認"));
+        ui.input("名称（必須）", "別の金額で再送");
+        ui.tap_nth("取消を確定", 1);
+        assert!(ui.has_text("前の操作結果を確認できていません。内容を変えて再送する前に、一覧で登録結果を確認してください"));
+        data.connection.token.set(None);
+        ui.tap("対象と履歴を読み直して確認");
+        assert!(data.edit.get_untracked().is_none());
+        assert_eq!(data.selected.get_untracked().unwrap()["id"], "rsv_fixture");
+        ui.drain_tasks();
+    });
+}
+
+#[test]
+fn reservation_initial_datetime_uses_japan_offset_without_dropping_seconds() {
+    let mut draft = json!({"startsAt":"2026-11-19T23:15:30Z","endsAt":"2026-11-20T00:45:30Z"});
+    reservation_screen::japanese_datetimes(
+        &[
+            Field::new("startsAt", "開始", InputKind::DateTime),
+            Field::new("endsAt", "終了", InputKind::DateTime),
+        ],
+        &mut draft,
+    );
+    assert_eq!(draft["startsAt"], "2026-11-20T08:15:30+09:00");
+    assert_eq!(draft["endsAt"], "2026-11-20T09:45:30+09:00");
+}
+
+#[test]
+fn reservation_calendar_filters_use_a_japan_day_and_clear_without_dropping_other_filters() {
+    with_ui(|ui| {
+        let resource = resources()
+            .into_iter()
+            .find(|r| r.key == "reservations")
+            .unwrap();
+        let data = data_fixture(resource, Value::Null);
+        data.filters.set(json!({"status":"confirmed"}));
+        ui.mount(render! { reservation_screen::ReservationToolbar(data: data) });
+        ui.input("予約日（日本時間）（必須）", "2026-11-20");
+        ui.tap("この日を表示");
+        assert_eq!(
+            data.filters.get_untracked()["from"],
+            "2026-11-20T00:00:00+09:00"
+        );
+        assert_eq!(
+            data.filters.get_untracked()["to"],
+            "2026-11-21T00:00:00+09:00"
+        );
+        assert_eq!(data.filters.get_untracked()["status"], "confirmed");
+        ui.tap("翌日");
+        assert_eq!(
+            data.filters.get_untracked()["from"],
+            "2026-11-21T00:00:00+09:00"
+        );
+        ui.tap("全期間を表示");
+        assert_eq!(data.filters.get_untracked()["from"], "");
+        assert_eq!(data.filters.get_untracked()["status"], "confirmed");
+        ui.drain_tasks();
+    });
+}
+
+#[test]
+fn reservation_create_seed_is_a_draft_and_does_not_become_an_existing_booking() {
+    with_ui(|ui| {
+        let resource = resources()
+            .into_iter()
+            .find(|r| r.key == "reservations")
+            .unwrap();
+        let data = data_fixture(resource, Value::Null);
+        let operation = resource.create.unwrap();
+        data.begin_prefilled(operation, json!({"startsAt":"2026-11-20 10:00","endsAt":"2026-11-20 11:00","customerName":"予約のテスト"}));
+        assert!(data.editing_original.get_untracked().is_null());
+        ui.mount(render! { EditRecord(data: data, operation: operation) });
+        assert!(ui.has_text("日時・場所・プラン"));
+        assert!(ui.has_text("この日の空き枠を調べる"));
+        assert!(ui.has_text("登録済みのお客様"));
+        assert!(!ui.has_text("人数・数量（変更不可）"));
+        ui.tap("この日の空き枠を調べる");
+        assert!(ui.has_text("予約種別と場所・設備を選んでください"));
+    });
+}
+
+#[test]
+fn reservation_email_shows_rendered_recipient_subject_and_body_before_sending() {
+    with_ui(|ui| {
+        let resource = resources()
+            .into_iter()
+            .find(|r| r.key == "reservations")
+            .unwrap();
+        let operation = crate::management::reservation_workflows::ACTIONS
+            .iter()
+            .find(|op| op.label == "予約確認メールを送る")
+            .copied()
+            .unwrap();
+        let original_value = json!({"id":"rsv_fixture","customerName":"予約 太郎","customerEmail":"guest@example.test","reservationNumber":"R-20","startsAt":"2026-11-20T00:00:00Z","endsAt":"2026-11-20T01:00:00Z","timezone":"Asia/Tokyo","status":"requested"});
+        let data = data_fixture(resource, original_value.clone());
+        let original = signal(original_value);
+        let draft = signal(
+            json!({"subjectTemplate":"予約 {{reservationNumber}}","bodyTemplate":"{{customerName}} 様 {{startsAt}}"}),
+        );
+        ui.mount(render! { reservation_screen::ReservationForm(data: data, operation: operation, draft: draft, original: original) });
+        assert!(ui.has_text("送信するメールのプレビュー"));
+        assert!(ui.has_text("guest@example.test"));
+        assert!(ui.has_text("予約 R-20"));
+        assert!(
+            ui.texts()
+                .iter()
+                .any(|text| text.contains("予約 太郎 様 2026/11/20 09:00"))
+        );
+        ui.input("件名（必須）", "変更 {{reservationNumber}}");
+        assert!(ui.has_text("変更 R-20"));
+    });
+}
+
+#[test]
+fn incomplete_reservation_context_does_not_claim_empty_history_or_offer_refund_retry() {
+    with_ui(|ui| {
+        let resource = resources()
+            .into_iter()
+            .find(|r| r.key == "reservations")
+            .unwrap();
+        let data = data_fixture(
+            resource,
+            json!({"id":"rsv_fixture","customerName":"予約 太郎","status":"cancelled","paymentStatus":"refund_pending","_reservationContextReady":{"cancellations":false,"unmatchedPayments":false},"_reservationCancellations":[],"_reservationUnmatchedPayments":[],"_reservationContextWarning":"取消履歴を取得できません"}),
+        );
+        ui.mount(render! { RecordDetail(data: data) });
+        assert!(ui.has_text("取消履歴を取得できません"));
+        assert!(!ui.has_text("履歴はありません"));
+        assert!(!ui.has_text("取消済みの返金を再実行"));
+    });
+}
+
+#[test]
+fn converted_waitlist_opens_the_booking_resource_without_guessing_an_id() {
+    with_ui(|ui| {
+        let resource = resources()
+            .into_iter()
+            .find(|r| r.key == "reservation-waitlist")
+            .unwrap();
+        let data = data_fixture(
+            resource,
+            json!({"id":"waitlist_fixture","status":"converted","convertedReservationId":"rsv_fixture","customerName":"予約 太郎"}),
+        );
+        ui.mount(render! { RecordDetail(data: data) });
+        ui.tap("繰り上げた予約を開く");
+        let (target, row) = data.related.get_untracked().unwrap();
+        assert_eq!(target.key, "reservations");
+        assert_eq!(row["id"], "rsv_fixture");
+        assert!(!ui.has_text("空き枠を選んで予約へ繰り上げ"));
+    });
+}
+
+#[test]
+fn record_scoped_picker_shows_names_and_preserves_a_deleted_choice() {
+    const FIELDS: &[Field] = &[
+        Field::new("choices", "", InputKind::Hidden),
+        Field::new(
+            "connectionId",
+            "接続先",
+            InputKind::RecordReference {
+                rows_key: "choices",
+                value_key: "id",
+                label_keys: &["name"],
+            },
+        ),
+    ];
+    with_ui(|ui| {
+        let draft = signal(
+            json!({"choices":[{"id":"internal-connection-a","name":"予約連絡チャンネル"}],"connectionId":"deleted-connection"}),
+        );
+        ui.mount(render! { InputFields(fields: FIELDS.to_vec(), draft: draft, prefix: String::new(), token: signal(None), tenant: signal(None)) });
+        assert!(ui.texts().iter().all(|s| !s.contains("deleted-connection")));
+        assert_eq!(draft.get_untracked()["connectionId"], "deleted-connection");
+        ui.tap("接続先");
+        ui.tap("予約連絡チャンネル");
+        assert_eq!(
+            draft.get_untracked()["connectionId"],
+            "internal-connection-a"
+        );
+        assert!(
+            ui.texts()
+                .iter()
+                .all(|s| !s.contains("internal-connection-a"))
+        );
     });
 }
 

@@ -83,6 +83,33 @@ fn form_field(
         InputKind::Reference(lookup) => {
             render! { ReferenceField(field: field, lookup: lookup, draft: draft, path: path.get_untracked(), parent_path: String::new(), children_key: "", token: token, tenant: tenant) }
         }
+        InputKind::RecordReference {
+            rows_key,
+            value_key,
+            label_keys,
+        } => {
+            let options = signal(Vec::<(String, String)>::new());
+            effect(move || {
+                options.set(draft.with(|value| {
+                    model::value_at(value, rows_key)
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|row| {
+                            let key = model::input_text(model::value_at(row, value_key));
+                            let label = label_keys
+                                .iter()
+                                .map(|key| model::display(model::value_at(row, key)))
+                                .filter(|text| !text.is_empty())
+                                .collect::<Vec<_>>()
+                                .join(" · ");
+                            (!key.is_empty() && !label.is_empty()).then_some((key, label))
+                        })
+                        .collect()
+                }));
+            });
+            render! { Picker(label: label.clone(), options: options, selected: computed(move || draft.with(|v| model::input_text(model::value_at(v, &path.get())))), on_pick: move |value: String| draft.update(|v| model::set_at(v, &path.get_untracked(), Value::String(value))), optional: !field.required, loading: signal(false), error: signal(String::new()), on_retry: |_| {}) }
+        }
         InputKind::DependentReference {
             lookup,
             parent_key,
@@ -297,7 +324,7 @@ fn reference_field(
 }
 
 #[component]
-fn picker(
+pub(crate) fn picker(
     label: String,
     options: RwSignal<Vec<(String, String)>>,
     selected: ReadSignal<String>,

@@ -22,6 +22,12 @@ mod jobcan;
 mod model;
 mod operations;
 mod receipt_pricing;
+mod reservation_handoff;
+mod reservation_notifications;
+mod reservation_settings;
+mod reservation_slots;
+mod reservation_waitlist;
+mod reservation_workflows;
 mod sales;
 pub(crate) mod schema;
 mod screen;
@@ -49,9 +55,15 @@ pub fn resources() -> Vec<schema::Resource> {
         .chain(receipt_pricing::RESOURCES)
         .chain(invoice_workflows::RESOURCES)
         .chain(inventory_workflows::RESOURCES)
+        .chain(reservation_notifications::RESOURCES)
+        .chain(reservation_slots::RESOURCES)
+        .chain(reservation_settings::RESOURCES)
         .copied()
         .map(invoice_workflows::decorate)
         .map(inventory_workflows::decorate)
+        .map(reservation_waitlist::decorate)
+        .map(reservation_settings::decorate)
+        .map(reservation_workflows::decorate)
         .collect()
 }
 
