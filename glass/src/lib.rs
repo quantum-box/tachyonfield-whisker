@@ -42,6 +42,8 @@ pub fn __whisker_element_module_definition() -> whisker::ElementModuleDefinition
             native_backdrop_schema::element_provider(),
             native_attach_button_schema::element_provider(),
             native_print_button_schema::element_provider(),
+            native_csv_export_button_schema::element_provider(),
+            native_payment_link_button_schema::element_provider(),
             native_document_preview_schema::element_provider(),
         ],
     )
@@ -432,7 +434,9 @@ pub fn appearance_observer(
     NativeAppearanceObserver::builder()
         .style(css!(position: PositionKind::Absolute, width: px(0), height: px(0)))
         .on_change(move |e: AppearanceEvent| on_change.run(e.detail.dark > 0.5))
-        .on_layout(move |e: LayoutEvent| on_layout.run((e.detail.wide > 0.5, e.detail.width as f32)))
+        .on_layout(move |e: LayoutEvent| {
+            on_layout.run((e.detail.wide > 0.5, e.detail.width as f32))
+        })
         .on_motion(move |e: MotionEvent| on_motion.run(e.detail.reduce > 0.5))
         .build()
 }
@@ -692,6 +696,133 @@ pub fn print_button(
 #[doc(hidden)]
 #[whisker::module_element(name = "field-glass:DocumentPreview", measurement = None)]
 pub fn native_document_preview(url: Signal<String>, style: Style) {}
+
+/// CSV保存・共有画面の終了結果。取り消しは `ok=false`、`error` は空。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct FileExportDetail {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct FileExportDoneEvent {
+    #[serde(default)]
+    pub detail: FileExportDetail,
+}
+
+pub const CSV_EXPORT_SUPPORTED: bool = cfg!(target_os = "ios");
+
+/// 支払リンクの手動操作の結果。共有画面の取消は `ok=false`、`error` は空。
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PaymentLinkDetail {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[non_exhaustive]
+pub struct PaymentLinkDoneEvent {
+    #[serde(default)]
+    pub detail: PaymentLinkDetail,
+}
+
+pub const PAYMENT_LINK_SUPPORTED: bool = cfg!(target_os = "ios");
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:PaymentLinkButton", measurement = None)]
+pub fn native_payment_link_button(
+    label: Signal<String>,
+    url: Signal<String>,
+    style: Style,
+    on_done: PaymentLinkDoneEvent,
+) {
+}
+
+/// HTTPSの支払リンクを、利用者のメニュー選択で開く・コピー・共有する。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn payment_link_button(
+    label: String,
+    url: Signal<String>,
+    on_done: Callback<PaymentLinkDetail>,
+    style: Style,
+) -> Element {
+    NativePaymentLinkButton::builder()
+        .label(label.clone())
+        .url(url)
+        .style(style.clone())
+        .on_done(move |event: PaymentLinkDoneEvent| on_done.run(event.detail))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn payment_link_button(
+    label: String,
+    url: Signal<String>,
+    on_done: Callback<PaymentLinkDetail>,
+    style: Style,
+) -> Element {
+    let _ = (&label, &url, &on_done, &style);
+    render! { View() }
+}
+
+#[doc(hidden)]
+#[whisker::module_element(name = "field-glass:CsvExportButton", measurement = None)]
+pub fn native_csv_export_button(
+    label: Signal<String>,
+    csv: Signal<String>,
+    name: Signal<String>,
+    style: Style,
+    on_done: FileExportDoneEvent,
+) {
+}
+
+/// 利用者が押すとCSVの「ファイルに保存」「共有」を選べるiOSのボタン。
+/// 取得したCSVは変更せずUTF-8で保存し、終了・取り消し後に一時ファイルを破棄する。
+#[cfg(target_os = "ios")]
+#[component]
+pub fn csv_export_button(
+    label: String,
+    csv: Signal<String>,
+    name: Signal<String>,
+    on_done: Callback<FileExportDetail>,
+    style: Style,
+) -> Element {
+    NativeCsvExportButton::builder()
+        .label(label.clone())
+        .csv(csv)
+        .name(name)
+        .style(style.clone())
+        .on_done(move |event: FileExportDoneEvent| on_done.run(event.detail))
+        .build()
+}
+
+#[cfg(not(target_os = "ios"))]
+#[component]
+pub fn csv_export_button(
+    label: String,
+    csv: Signal<String>,
+    name: Signal<String>,
+    on_done: Callback<FileExportDetail>,
+    style: Style,
+) -> Element {
+    let _ = (&label, &csv, &name, &on_done, &style);
+    render! { View() }
+}
 
 /// 証憑の原本（写真・PDF）を出す枠。`url` が https のときだけ読む。iOS 以外は何も出さない。
 #[cfg(target_os = "ios")]

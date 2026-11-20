@@ -15,6 +15,8 @@ Liquid Glass, sheets) through the `glass/` (`field-glass`) Whisker module.
   from counted quantities through finalization
 - Daily-report submission/review, store opening checks, attendance CSV preview/import,
   accounting workflows, reports and analysis
+- Reservation calendars, start-slot picking, customer and plan selection, rescheduling,
+  payment links, cancellation/refund recovery, waitlists, handoff notes and notifications
 - Field Agent chat, streamed over SSE
 
 Licensed under the [MIT License](LICENSE).
@@ -35,7 +37,7 @@ target.
 ## Management coverage
 
 The native management screens are compared with the Field web app's 113 top-level
-menu entries. The catalog has 155 screen definitions covering 110 of those menus;
+menu entries. The catalog has 161 screen definitions covering 110 of those menus;
 existing dedicated screens provide the remaining three. The
 [coverage matrix](docs/native-management-parity.md) lists the implemented reads,
 writes and remaining differences for every menu. Some menus provide read access
@@ -48,6 +50,11 @@ The [sales and workforce notes](docs/native-management-sales.md),
 and their limits. Product stock and location stock use separate workflows. Invoice
 PDF delivery shows when sending can activate a draft sales contract, and invoice
 cancellation shows the reversal plan before execution.
+
+The [reservation workflow notes](docs/native-reservations.md) cover booking and
+payment actions, waitlist promotion, scheduling, legacy settings and iOS CSV/link
+exports. The app distinguishes unknown write outcomes from preflight rejections;
+reservation cancellation can require history review even after an HTTP 400.
 
 Existing sales and customer tabs open the same native management components as the
 management menu. The app keeps the dedicated strategy, cash-book, register-closing,

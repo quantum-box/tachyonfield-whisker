@@ -186,9 +186,9 @@ pub const RESOURCES: &[Resource] = &[
     Resource::new("reservation-daily-budgets", "予約管理", "日別予算", "/v1/erp/extensions/golf-course/daily-budgets", "items")
         .load(load_budgets).filters(BUDGET_FILTERS).title(&["date", "courseName"]).subtitle(&["courseName", "targetRevenue"])
         .fields(&[("コース", "courseName"), ("対象日", "date"), ("目標売上（円）", "targetRevenue"), ("目標客単価（円）", "targetAverageSpend"), ("キャディ付き比率（0〜1）", "targetCaddyAttachedRatio")])
-        .create(Mutation::new("日別予算を登録", "POST", "/v1/erp/extensions/golf-course/daily-budgets", BUDGET_CREATE).prepare(budget_payload).explain("同じコース・日付の予算がある場合は更新します。"))
-        .edit(Mutation::new("日別予算を更新", "POST", "/v1/erp/extensions/golf-course/daily-budgets", BUDGET_VALUES).prepare(budget_payload))
-        .actions(&[Mutation::new("日別予算を削除", "DELETE", "/v1/erp/extensions/golf-course/daily-budgets/{golfCourseId}/{date}", &[]).destructive().explain("このコース・日付の予算を削除します。")])
+        .create(Mutation::new("日別予算を登録", "POST", "/v1/erp/extensions/golf-course/daily-budgets", BUDGET_CREATE).prepare(budget_payload).execute(save_budget).explain("同じコース・日付の予算が登録済みなら、一覧で現在の金額を確認してから編集してください。"))
+        .edit(Mutation::new("日別予算を更新", "POST", "/v1/erp/extensions/golf-course/daily-budgets", BUDGET_VALUES).prepare(budget_payload).execute(save_budget))
+        .actions(&[Mutation::new("日別予算を削除", "DELETE", "/v1/erp/extensions/golf-course/daily-budgets/{golfCourseId}/{date}", &[]).execute(delete_budget).destructive().explain("このコース・日付の予算を削除します。")])
         .route("reservations/daily-budgets"),
     Resource::new("staff-shifts", "人事労務", "シフト管理", "/v1/erp/hrm/shift-board", "shifts")
         .load(load_shifts).filters(SHIFT_FILTERS).title(&["staffName", "date"]).subtitle(&["date", "startTime", "endTime", "shiftType"])
@@ -628,7 +628,7 @@ const PLAN_MEMBERSHIPS: Lookup = Lookup {
     label_keys: &["name"],
 };
 const PLAN_TYPES: Lookup = Lookup {
-    path: "/v1/erp/reservation-types",
+    path: "/v1/erp/reservation-types/manage?includeInactive=true",
     list_key: "items",
     value_key: "id",
     label_keys: &["name"],
@@ -775,11 +775,23 @@ fn plan_view(raw: &Value, catalog: bool) -> Result<Value, String> {
             .clone();
         view["available"] = json!(raw["enabled"] != false);
     } else {
-        view["available"] = json!(raw["enabled"] != false);
+        view["available"] = json!(raw["enabled"] != false && raw["available"] != false);
     }
     if view["id"].as_str().is_none_or(str::is_empty) {
         return Err("予約プランの識別情報を確認できません".into());
     }
+    let policy = match view
+        .get("prepaymentPolicy")
+        .filter(|value| !value.is_null())
+        .unwrap_or(&view["paymentRequirement"])
+        .as_str()
+    {
+        Some("deposit" | "partial" | "deposit_required") => "deposit_required",
+        Some("full" | "full_prepayment" | "full_required") => "full_required",
+        Some("optional") => "optional",
+        _ => "none",
+    };
+    view["prepaymentPolicy"] = json!(policy);
     for (key, fallback) in [
         ("description", json!("")),
         ("reservationTypeId", json!("")),
@@ -851,7 +863,7 @@ fn get_plan_config(token: &str, tenant: &api::Tenant) -> Result<Value, String> {
     Ok(value)
 }
 
-fn load_plans(token: &str, tenant: &api::Tenant, _: &Value) -> Result<Value, String> {
+pub(crate) fn load_plans(token: &str, tenant: &api::Tenant, _: &Value) -> Result<Value, String> {
     let catalog = get_plan_catalog(token, tenant)?;
     let seeded = catalog["seeded"] == true;
     let source = if seeded {
@@ -859,20 +871,76 @@ fn load_plans(token: &str, tenant: &api::Tenant, _: &Value) -> Result<Value, Str
     } else {
         get_plan_config(token, tenant)?
     };
-    let rows = if seeded {
-        &source["items"]
+    let items = if seeded {
+        source["items"]
+            .as_array()
+            .ok_or("予約カタログの一覧を確認できません")?
+            .iter()
+            .map(|row| plan_view(row, true))
+            .collect::<Result<Vec<_>, _>>()?
     } else {
-        &source["configJson"]["reservationProducts"]
+        legacy_plan_views(&source)?
     };
-    let items = rows
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|row| plan_view(row, seeded))
-        .collect::<Result<Vec<_>, _>>()?;
     Ok(
         json!({"items":items,"seeded":seeded,"productMastersLinked":catalog["productMastersLinked"]}),
     )
+}
+
+fn legacy_plan_id(row: &Value, index: usize) -> Result<String, String> {
+    if !row.is_object() {
+        return Err("旧予約プランの形式を確認できません".into());
+    }
+    // Web uses this same positional fallback for pre-catalogue documents.
+    Ok(row["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("plan_{}", index + 1)))
+}
+
+fn canonical_legacy_rows(config: &Value) -> Result<Vec<Value>, String> {
+    let rows = match config.get("reservationProducts") {
+        None => &[][..],
+        Some(Value::Array(rows)) => rows.as_slice(),
+        _ => return Err("旧予約プラン一覧を確認できません".into()),
+    };
+    let mut seen = std::collections::HashSet::new();
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let id = legacy_plan_id(row, index)?;
+            if !seen.insert(id.clone()) {
+                return Err("旧予約プランの識別情報が重複しています。設定の確認が必要です".into());
+            }
+            let mut row = row.clone();
+            row["id"] = json!(id);
+            Ok(row)
+        })
+        .collect()
+}
+
+fn legacy_snapshot(source: &Value) -> Value {
+    json!({"configVersion":source["configVersion"],"configJson":source["configJson"]})
+}
+
+fn legacy_plan_views(source: &Value) -> Result<Vec<Value>, String> {
+    let rows = canonical_legacy_rows(&source["configJson"])?;
+    rows.iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let mut view = plan_view(row, false)?;
+            view["_nativeSource"] = source["configJson"]["reservationProducts"][index].clone();
+            view["_nativeConfigSnapshot"] = legacy_snapshot(source);
+            Ok(view)
+        })
+        .collect()
+}
+
+fn compare_legacy_snapshot(original: &Value, current: &Value) -> Result<(), String> {
+    if !original.is_null() && original["_nativeConfigSnapshot"] != legacy_snapshot(current) {
+        return Err("旧予約設定が変更されています。プランの並びと内容を読み直してから操作してください（409）".into());
+    }
+    Ok(())
 }
 
 fn plan_payload(body: &mut Value, original: &Value) -> Result<(), String> {
@@ -979,6 +1047,9 @@ fn merge_plan(source: Option<&Value>, body: &Value) -> Value {
             plan.as_object_mut().unwrap().remove(key);
         }
     }
+    // The canonical policy replaces its legacy spelling. Retaining both could
+    // restore an obsolete deposit/full-prepayment requirement on a later read.
+    plan.as_object_mut().unwrap().remove("paymentRequirement");
     plan
 }
 
@@ -1016,10 +1087,9 @@ fn merge_plan_config(mut config: Value, plan: &Value, delete: bool) -> Result<Va
         .as_str()
         .filter(|s| !s.is_empty())
         .ok_or("予約プランの識別情報を確認できません")?;
-    let mut plans = config["reservationProducts"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    // Assign missing positional IDs before deletion can shift the remaining
+    // positions. Non-identity values, including unknown fields, stay untouched.
+    let mut plans = canonical_legacy_rows(&config)?;
     let index = plans.iter().position(|row| row["id"] == id);
     if delete {
         if let Some(index) = index {
@@ -1116,11 +1186,12 @@ fn save_plan(
         )
     } else {
         let source = get_plan_config(token, tenant)?;
-        let current = source["configJson"]["reservationProducts"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|row| row["id"] == id);
+        compare_legacy_snapshot(original, &source)?;
+        let views = legacy_plan_views(&source)?;
+        let current = views
+            .iter()
+            .find(|row| row["id"] == id)
+            .map(|view| &view["_nativeSource"]);
         compare_plan_source(original, current, false)?;
         if original.is_null() && current.is_some() {
             if current == Some(&merge_plan(current, &body)) {
@@ -1164,11 +1235,12 @@ fn delete_plan(
         )
     } else {
         let source = get_plan_config(token, tenant)?;
-        let current = source["configJson"]["reservationProducts"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|row| row["id"] == id);
+        compare_legacy_snapshot(original, &source)?;
+        let views = legacy_plan_views(&source)?;
+        let current = views
+            .iter()
+            .find(|row| row["id"] == id)
+            .map(|view| &view["_nativeSource"]);
         compare_plan_source(original, current, false)?;
         let payload = merge_plan_config(source["configJson"].clone(), &json!({"id":id}), true)?;
         api::mutate_record(token, tenant, "PATCH", PLAN_CONFIG_PATH, &payload, None)
@@ -1259,6 +1331,8 @@ fn budget_payload(body: &mut Value, original: &Value) -> Result<(), String> {
             return Err("コースと対象日を指定してください".into());
         }
     }
+    NaiveDate::parse_from_str(body["date"].as_str().unwrap_or_default(), "%Y-%m-%d")
+        .map_err(|_| "対象日は有効な YYYY-MM-DD で入力してください")?;
     nonnegative(body, "targetRevenue", "目標売上")?;
     nonnegative(body, "targetAverageSpend", "目標客単価")?;
     body["targetCaddyAttachedRatio"] = decimal_ratio(&body["targetCaddyAttachedRatio"])?;
@@ -1266,6 +1340,7 @@ fn budget_payload(body: &mut Value, original: &Value) -> Result<(), String> {
 }
 
 fn load_budgets(token: &str, tenant: &api::Tenant, filters: &Value) -> Result<Value, String> {
+    budget_range(filters)?;
     let path = model::query_path(
         "/v1/erp/extensions/golf-course/daily-budgets",
         BUDGET_FILTERS,
@@ -1285,6 +1360,157 @@ fn load_budgets(token: &str, tenant: &api::Tenant, filters: &Value) -> Result<Va
             .unwrap_or_else(|| json!("コース名未設定"));
     }
     Ok(response)
+}
+
+fn budget_range(filters: &Value) -> Result<(), String> {
+    let parse = |key: &str| -> Result<Option<NaiveDate>, String> {
+        filters[key]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                    .map_err(|_| "予算の対象日を確認してください".to_owned())
+            })
+            .transpose()
+    };
+    if matches!((parse("from")?, parse("to")?), (Some(from), Some(to)) if from > to) {
+        return Err("終了日は開始日以降にしてください".into());
+    }
+    Ok(())
+}
+
+fn budget_current(
+    token: &str,
+    tenant: &api::Tenant,
+    scope: &Value,
+) -> Result<Option<Value>, String> {
+    let course = scope["golfCourseId"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or("コースを確認してください")?;
+    let day = scope["date"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or("対象日を確認してください")?;
+    NaiveDate::parse_from_str(day, "%Y-%m-%d").map_err(|_| "対象日を確認してください")?;
+    let response = api::fetch_record(
+        token,
+        tenant,
+        &format!(
+            "/v1/erp/extensions/golf-course/daily-budgets?golfCourseId={}&from={}&to={}",
+            api::encode_query(course),
+            api::encode_query(day),
+            api::encode_query(day)
+        ),
+    )?;
+    let rows = response["items"]
+        .as_array()
+        .ok_or("日別予算の応答形式を確認できません")?;
+    if rows.len() > 1
+        || rows.iter().any(|row| {
+            row["golfCourseId"].as_str() != Some(course) || row["date"].as_str() != Some(day)
+        })
+    {
+        return Err("対象のコース・日付の予算を確認できません".into());
+    }
+    Ok(rows.first().cloned())
+}
+
+fn compare_budget(original: &Value, current: Option<&Value>) -> Result<(), String> {
+    if original.is_null() {
+        if current.is_some() {
+            return Err("このコース・日付の予算は登録済みです。一覧から現在の金額を確認して編集してください".into());
+        }
+    } else {
+        let current = current.ok_or("予算が削除されています。一覧を読み直してください")?;
+        for key in [
+            "id",
+            "golfCourseId",
+            "date",
+            "targetRevenue",
+            "targetAverageSpend",
+            "targetCaddyAttachedRatio",
+            "updatedAt",
+        ] {
+            if original[key] != current[key] {
+                return Err(
+                    "予算が変更されています。一覧を読み直してから編集してください（409）".into(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn save_budget(
+    token: &str,
+    tenant: &api::Tenant,
+    body: &Value,
+    original: &Value,
+) -> Result<Value, String> {
+    let courses = api::fetch_record(token, tenant, COURSES.path)?;
+    let course = courses["items"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["id"] == body["golfCourseId"]))
+        .ok_or("コースを確認できません。候補を読み直してください")?;
+    if original.is_null() && course["isActive"] != true {
+        return Err("新しい予算は有効なコースを選択してください".into());
+    }
+    let current = budget_current(token, tenant, body)?;
+    compare_budget(original, current.as_ref())?;
+    let result = api::mutate_record(
+        token,
+        tenant,
+        "POST",
+        "/v1/erp/extensions/golf-course/daily-budgets",
+        body,
+        None,
+    )?;
+    check_saved_budget(body, &result)?;
+    Ok(result)
+}
+
+fn check_saved_budget(body: &Value, result: &Value) -> Result<(), String> {
+    for key in [
+        "golfCourseId",
+        "date",
+        "targetRevenue",
+        "targetAverageSpend",
+    ] {
+        if result[key] != body[key] {
+            return Err("予算の保存結果を確認できません。一覧を読み直してください".into());
+        }
+    }
+    // The API serializes this bounded fractional rate as f64 (including 0.0).
+    // Currency amounts above stay integers and never pass through float conversion.
+    if result["targetCaddyAttachedRatio"].as_f64().is_none()
+        || result["targetCaddyAttachedRatio"].as_f64() != body["targetCaddyAttachedRatio"].as_f64()
+    {
+        return Err("予算の保存結果を確認できません。一覧を読み直してください".into());
+    }
+    Ok(())
+}
+
+fn delete_budget(
+    token: &str,
+    tenant: &api::Tenant,
+    _: &Value,
+    original: &Value,
+) -> Result<Value, String> {
+    let current = budget_current(token, tenant, original)?;
+    compare_budget(original, current.as_ref())?;
+    let path = model::record_path(
+        Resource::new(
+            "budget",
+            "",
+            "",
+            "/v1/erp/extensions/golf-course/daily-budgets",
+            "items",
+        ),
+        "/v1/erp/extensions/golf-course/daily-budgets/{golfCourseId}/{date}",
+        original,
+    )?;
+    api::mutate_record(token, tenant, "DELETE", &path, &json!({}), None)
 }
 
 fn shift_payload(body: &mut Value, _: &Value) -> Result<(), String> {
@@ -1717,6 +1943,140 @@ mod tests {
         assert!(decimal_ratio(&json!("1.0001")).is_err());
         assert!(decimal_ratio(&json!("0.12345")).is_err());
         assert!(decimal_ratio(&json!("-0.1")).is_err());
+    }
+
+    #[test]
+    fn legacy_plan_payment_policy_is_normalized_and_old_spelling_removed() {
+        for (legacy, expected) in [
+            ("deposit", "deposit_required"),
+            ("partial", "deposit_required"),
+            ("full", "full_required"),
+            ("full_prepayment", "full_required"),
+            ("optional", "optional"),
+        ] {
+            let raw = json!({"id":"legacy","name":"既存プラン","priceAmount":2500,"durationMinutes":60,"paymentRequirement":legacy,"depositRatio":0.125,"custom":{"retain":true},"available":false});
+            let original = plan_view(&raw, false).unwrap();
+            assert_eq!(original["prepaymentPolicy"], expected);
+            assert_eq!(original["available"], false);
+            let op = PLAN_RESOURCE.edit.unwrap();
+            let draft = model::draft(op.fields, &original);
+            let body = model::request_body(op, &draft, &original, "").unwrap();
+            let merged = merge_plan(Some(&raw), &body);
+            assert_eq!(merged["prepaymentPolicy"], expected);
+            assert!(merged.get("paymentRequirement").is_none());
+            assert_eq!(merged["custom"], raw["custom"]);
+            assert_eq!(
+                merged["depositRatio"],
+                if expected == "deposit_required" {
+                    json!(0.125)
+                } else {
+                    json!(0)
+                }
+            );
+        }
+        let raw = json!({"id":"canonical","prepaymentPolicy":"none","paymentRequirement":"full"});
+        assert_eq!(plan_view(&raw, false).unwrap()["prepaymentPolicy"], "none");
+    }
+
+    #[test]
+    fn legacy_plans_without_ids_load_and_only_the_selected_plan_is_edited() {
+        let first = json!({"name":"午前","priceAmount":3500,"durationMinutes":90,"paymentRequirement":"deposit","depositRatio":0.125,"unknown":{"first":true}});
+        let second = json!({"id":"existing-plan","name":"午後","priceAmount":4500,"durationMinutes":120,"unknown":{"second":true}});
+        let third =
+            json!({"name":"夕方","priceAmount":2500,"durationMinutes":60,"unknown":[1,2,3]});
+        let source = json!({"configVersion":3,"configJson":{"timezone":"Asia/Tokyo","unknownTenantPolicy":["keep"],"reservationProducts":[first,second,third]}});
+        let views = legacy_plan_views(&source).unwrap();
+        assert_eq!(views[0]["id"], "plan_1");
+        assert_eq!(views[1]["id"], "existing-plan");
+        assert_eq!(views[2]["id"], "plan_3");
+        compare_legacy_snapshot(&views[0], &source).unwrap();
+        compare_plan_source(&views[0], Some(&first), false).unwrap();
+        let op = PLAN_RESOURCE.edit.unwrap();
+        let mut draft = model::draft(op.fields, &views[0]);
+        draft["name"] = json!("午前・更新");
+        let body = model::request_body(op, &draft, &views[0], "").unwrap();
+        let payload = merge_plan_config(source["configJson"].clone(), &body, false).unwrap();
+        let rows = &payload["configJson"]["reservationProducts"];
+        assert_eq!(rows[0]["id"], "plan_1");
+        assert_eq!(rows[0]["name"], "午前・更新");
+        assert_eq!(rows[0]["unknown"], first["unknown"]);
+        assert_eq!(rows[0]["prepaymentPolicy"], "deposit_required");
+        assert_eq!(rows[0]["depositRatio"], 0.125);
+        assert_eq!(rows[1], second);
+        let mut expected_third = third.clone();
+        expected_third["id"] = json!("plan_3");
+        assert_eq!(rows[2], expected_third);
+        assert_eq!(
+            payload["configJson"]["unknownTenantPolicy"],
+            source["configJson"]["unknownTenantPolicy"]
+        );
+    }
+
+    #[test]
+    fn legacy_positional_identity_cannot_retarget_after_reorder_or_deletion() {
+        let source = json!({"configVersion":1,"configJson":{"reservationProducts":[{"name":"午前","priceAmount":1000},{"name":"午後","priceAmount":2000}]}});
+        let original = legacy_plan_views(&source).unwrap()[0].clone();
+        let mut reordered = source.clone();
+        reordered["configJson"]["reservationProducts"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        assert!(compare_legacy_snapshot(&original, &reordered).is_err());
+        let mut other_setting = source.clone();
+        other_setting["configJson"]["unrelatedSetting"] = json!(true);
+        assert!(compare_legacy_snapshot(&original, &other_setting).is_err());
+        let mut newer = source.clone();
+        newer["configVersion"] = json!(2);
+        assert!(compare_legacy_snapshot(&original, &newer).is_err());
+        let payload =
+            merge_plan_config(source["configJson"].clone(), &json!({"id":"plan_1"}), true).unwrap();
+        let remaining =
+            legacy_plan_views(&json!({"configVersion":1,"configJson":payload["configJson"]}))
+                .unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0]["id"], "plan_2");
+        assert_eq!(remaining[0]["name"], "午後");
+        assert!(
+            compare_legacy_snapshot(
+                &original,
+                &json!({"configVersion":1,"configJson":payload["configJson"]})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn ambiguous_legacy_ids_are_never_silently_assigned_to_multiple_plans() {
+        let source = json!({"configVersion":1,"configJson":{"reservationProducts":[{"name":"一件目"},{"id":"plan_1","name":"二件目"}]}});
+        assert!(legacy_plan_views(&source).is_err());
+        assert!(
+            merge_plan_config(source["configJson"].clone(), &json!({"id":"plan_1"}), true).is_err()
+        );
+        let empty = json!({"configVersion":0,"configJson":{}});
+        assert!(legacy_plan_views(&empty).unwrap().is_empty());
+    }
+
+    #[test]
+    fn budget_preflight_rejects_unseen_upsert_stale_amounts_and_invalid_dates() {
+        let original = json!({"id":"budget1","golfCourseId":"course1","date":"2026-11-20","targetRevenue":9007199254740993_i64,"targetAverageSpend":2500,"targetCaddyAttachedRatio":0.125,"updatedAt":"first"});
+        assert!(compare_budget(&Value::Null, Some(&original)).is_err());
+        compare_budget(&Value::Null, None).unwrap();
+        compare_budget(&original, Some(&original)).unwrap();
+        let mut current = original.clone();
+        current["targetRevenue"] = json!(9007199254740994_i64);
+        assert!(compare_budget(&original, Some(&current)).is_err());
+        assert!(compare_budget(&original, None).is_err());
+        assert!(budget_range(&json!({"from":"2026-11-20","to":"2026-11-19"})).is_err());
+        assert!(budget_range(&json!({"from":"2026-02-30"})).is_err());
+        let mut invalid = json!({"golfCourseId":"course1","date":"2026-02-30","targetRevenue":100,"targetAverageSpend":10,"targetCaddyAttachedRatio":"0.1"});
+        assert!(budget_payload(&mut invalid, &Value::Null).is_err());
+        let mut saved = original.clone();
+        let mut body = original.clone();
+        body["targetCaddyAttachedRatio"] = json!(0);
+        saved["targetCaddyAttachedRatio"] = json!(0.0);
+        check_saved_budget(&body, &saved).unwrap();
+        saved["targetRevenue"] = json!(9007199254740994_i64);
+        assert!(check_saved_budget(&body, &saved).is_err());
     }
 
     #[test]

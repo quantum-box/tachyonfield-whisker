@@ -260,6 +260,27 @@ fn line_value(
         return String::new();
     }
     match field.kind {
+        InputKind::RecordReference {
+            rows_key,
+            value_key,
+            label_keys,
+        } => {
+            let selected = model::input_text(value);
+            model::value_at(record, rows_key)
+                .as_array()
+                .and_then(|rows| {
+                    rows.iter().find(|candidate| {
+                        model::input_text(model::value_at(candidate, value_key)) == selected
+                    })
+                })
+                .and_then(|candidate| {
+                    label_keys
+                        .iter()
+                        .map(|key| model::display(model::value_at(candidate, key)))
+                        .find(|label| !label.is_empty())
+                })
+                .unwrap_or_else(|| "名称を確認できません".into())
+        }
         InputKind::Reference(lookup) | InputKind::DependentReference { lookup, .. } => {
             let id = model::input_text(value);
             if id.is_empty() {
@@ -573,6 +594,29 @@ mod tests {
                 .any(|(_, label, value)| label == "借方金額" && value == "9007199254740993")
         );
         assert!(!format!("{sections:?}").contains("private-account"));
+    }
+
+    #[test]
+    fn scoped_reference_details_show_names_without_internal_identifiers() {
+        let resource = Resource::new("notification", "", "", "/", "items");
+        let field = Field::new(
+            "connectionId",
+            "Slack接続",
+            InputKind::RecordReference {
+                rows_key: "connections",
+                value_key: "id",
+                label_keys: &["name"],
+            },
+        );
+        let row = json!({"connectionId":"internal-connection"});
+        let record = json!({"connections":[{"id":"internal-connection","name":"受付チーム"}]});
+        assert_eq!(
+            line_value(resource, field, &row, &record, &[]),
+            "受付チーム"
+        );
+        let missing = line_value(resource, field, &row, &json!({"connections":[]}), &[]);
+        assert_eq!(missing, "名称を確認できません");
+        assert!(!missing.contains("internal-connection"));
     }
 
     #[test]
