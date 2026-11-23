@@ -492,6 +492,7 @@ fn login(token: RwSignal<Option<String>>) -> Element {
                         color: hex(LABEL),
                         font_size: px(34),
                         font_weight: FontWeight::Bold,
+                        text_align: TextAlign::Center,
                     )),
                 )
                 Text(
