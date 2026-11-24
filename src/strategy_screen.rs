@@ -272,7 +272,7 @@ pub(crate) fn strategy_screen(
                             on_refresh: move |_| tree.refresh(),
                         )
                         DivisionTabs(tree: tree)
-                        Legend(tree: tree)
+                        Legend(tree: tree, has_rows: computed(move || !rows.with(Vec::is_empty)))
                         Show(when: move || summary.with(Option::is_some)) {
                             Text(
                                 value: computed(move || summary.get().unwrap_or_default()),
@@ -445,8 +445,9 @@ fn division_tabs(tree: Tree) -> Element {
 }
 
 /// 段の凡例（MVV → 目標 → KR → 施策 → 行動）と、まとめて開閉するボタン。
+/// 開閉するものがない空のツリーでは、ボタンを出さない。
 #[component]
-fn legend(tree: Tree) -> Element {
+fn legend(tree: Tree, has_rows: Signal<bool>) -> Element {
     let items: Vec<(usize, &'static str)> = model::LEGEND.iter().copied().enumerate().collect();
     render! {
         View(
@@ -489,28 +490,30 @@ fn legend(tree: Tree) -> Element {
                     },
                 )
             }
-            View(
-                style: css!(
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    gap: px(16),
-                ),
-            ) {
-                Text(
-                    value: "すべて開く",
-                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
-                    on_tap: move |_| tree.collapsed.set(HashSet::new()),
-                )
-                Text(
-                    value: "目標まで閉じる",
-                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
-                    on_tap: move |_| {
-                        let set = tree.workspace.with_untracked(|ws| {
-                            ws.as_ref().map(model::collapse_to_objectives).unwrap_or_default()
-                        });
-                        tree.collapsed.set(set);
-                    },
-                )
+            Show(when: move || has_rows.get()) {
+                View(
+                    style: css!(
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Row,
+                        gap: px(16),
+                    ),
+                ) {
+                    Text(
+                        value: "すべて開く",
+                        style: computed(move || css!(color: hex(TINT), font_size: px(14))),
+                        on_tap: move |_| tree.collapsed.set(HashSet::new()),
+                    )
+                    Text(
+                        value: "目標まで閉じる",
+                        style: computed(move || css!(color: hex(TINT), font_size: px(14))),
+                        on_tap: move |_| {
+                            let set = tree.workspace.with_untracked(|ws| {
+                                ws.as_ref().map(model::collapse_to_objectives).unwrap_or_default()
+                            });
+                            tree.collapsed.set(set);
+                        },
+                    )
+                }
             }
         }
     }
