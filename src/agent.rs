@@ -238,6 +238,11 @@ impl AgentChat {
     }
 
     fn stop(&self) {
+        self.stop_with("止めました");
+    }
+
+    /// 今の返事を止めて、その旨を会話に残す。
+    fn stop_with(&self, notice: &str) {
         if let Some(flag) = self.cancel.get_untracked() {
             flag.store(true, Ordering::Relaxed);
         }
@@ -246,7 +251,7 @@ impl AgentChat {
             self.sending.set(false);
             self.settle_tools();
             self.fold_turn();
-            self.push(Role::Notice, "止めました".into(), String::new());
+            self.push(Role::Notice, notice.into(), String::new());
         }
     }
 }
@@ -534,11 +539,12 @@ pub fn agent_screen(
     let send = move || {
         let typed = draft.get_untracked().trim().to_owned();
         let picked = chat.pending.get_untracked();
-        if (typed.is_empty() && picked.is_empty())
-            || sending.get_untracked()
-            || tenant.with_untracked(Option::is_none)
-        {
+        if (typed.is_empty() && picked.is_empty()) || tenant.with_untracked(Option::is_none) {
             return;
+        }
+        // 返事の途中で送ったら、今の返事を止めて、この頼みで続ける。
+        if sending.get_untracked() {
+            chat.stop_with("止めて、次の頼みに切り替えました");
         }
         draft.set(String::new());
         chat.pending.set(Vec::new());
@@ -805,9 +811,7 @@ fn composer(
                 )
                 View(
                     style: computed(move || {
-                        let busy = sending.get();
-                        let ready = busy
-                            || !draft.with(|d| d.trim().is_empty())
+                        let typed = !draft.with(|d| d.trim().is_empty())
                             || pending.with(|p| !p.is_empty());
                         css!(
                             width: px(36),
@@ -816,15 +820,18 @@ fn composer(
                             display: Display::Flex,
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
-                            background_color: hex(match (busy, ready) {
-                                (true, _) => LABEL,
-                                (false, true) => TINT,
-                                _ => DISABLED,
+                            background_color: hex(match send_button(sending.get(), typed) {
+                                SendButton::Stop => LABEL,
+                                SendButton::Send => TINT,
+                                SendButton::Disabled => DISABLED,
                             }),
                         )
                     }),
                     on_tap: move |_| {
-                        if sending.get_untracked() {
+                        let typed = !draft.with_untracked(|d| d.trim().is_empty())
+                            || pending.with_untracked(|p| !p.is_empty());
+                        // 返事の途中でも、入力があれば送る（今の返事は止めて切り替える）。
+                        if send_button(sending.get_untracked(), typed) == SendButton::Stop {
                             on_stop.run(());
                         } else {
                             on_send.run(());
@@ -832,9 +839,16 @@ fn composer(
                     },
                 ) {
                     Text(
-                        value: computed(move || if sending.get() { "■" } else { "↑" }.to_owned()),
+                        value: computed(move || {
+                            let typed = !draft.with(|d| d.trim().is_empty())
+                                || pending.with(|p| !p.is_empty());
+                            if send_button(sending.get(), typed) == SendButton::Stop { "■" } else { "↑" }
+                                .to_owned()
+                        }),
                         style: computed(move || {
-                            let busy = sending.get();
+                            let typed = !draft.with(|d| d.trim().is_empty())
+                                || pending.with(|p| !p.is_empty());
+                            let busy = send_button(sending.get(), typed) == SendButton::Stop;
                             css!(
                                 // 止めるボタンは文字色の丸。暗い表示では白い丸になるので、■ は黒にする。
                                 color: Color::hex(if busy && is_dark() { 0x000000 } else { 0xFFFFFF }),
@@ -846,6 +860,25 @@ fn composer(
                 }
             }
         }
+    }
+}
+
+/// 入力欄の右の丸ボタンの役目。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SendButton {
+    /// 返事の途中で、入力が空：■ で止める。
+    Stop,
+    /// 入力がある：↑ で送る。返事の途中なら、止めてから送る。
+    Send,
+    /// 返事もなく入力も空。
+    Disabled,
+}
+
+fn send_button(sending: bool, typed: bool) -> SendButton {
+    match (sending, typed) {
+        (_, true) => SendButton::Send,
+        (true, false) => SendButton::Stop,
+        (false, false) => SendButton::Disabled,
     }
 }
 
@@ -1359,6 +1392,14 @@ mod tests {
         assert_ne!(sparkle_pulse(true).name, sparkle_pulse(false).name);
         assert!(dot_style(1, false).to_string().contains("animation"));
         assert!(!dot_style(1, true).to_string().contains("animation"));
+    }
+
+    #[test]
+    fn typing_during_a_reply_turns_stop_into_send() {
+        assert_eq!(send_button(true, false), SendButton::Stop);
+        assert_eq!(send_button(true, true), SendButton::Send);
+        assert_eq!(send_button(false, true), SendButton::Send);
+        assert_eq!(send_button(false, false), SendButton::Disabled);
     }
 
     #[test]
