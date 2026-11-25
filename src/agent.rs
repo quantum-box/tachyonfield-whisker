@@ -560,8 +560,8 @@ pub fn agent_screen(
             return;
         }
         // 返事の途中で送ったら、今の返事を止めて、この頼みで続ける。
+        // Field は次の頼みを流す前に、前の返事を自分で止める。
         if sending.get_untracked() {
-            cancel_remote();
             chat.stop_with("止めて、次の頼みに切り替えました");
         }
         draft.set(String::new());
