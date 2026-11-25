@@ -1166,6 +1166,22 @@ pub fn agent_session(token: &str, tenant: &Tenant) -> Result<String, String> {
         .ok_or_else(|| "会話を始められませんでした".into())
 }
 
+/// 会話で今動いている返事を、Field の側でも止めてもらう。
+/// こちらが読むのをやめても、サーバーは次の知らせが来るまで気づかないため。
+/// 古い Field にはこの口がない（404）が、次の頼みは Field が前の返事を止めてから流す。
+pub fn agent_cancel(token: &str, tenant: &Tenant, session: &str) -> Result<(), String> {
+    field_request(
+        "POST",
+        &format!("/v1/field/agent/sessions/{session}/cancel"),
+        token,
+        &tenant.id,
+        &tenant.platform_id,
+    )
+    .send_json(json!({}))
+    .map_err(describe_error)?;
+    Ok(())
+}
+
 /// Field Agent に 1 つ頼み、返事を少しずつ `emit` に渡す（SSE）。
 /// 道具（Field の操作）はサーバー側で実行され、その経過も届く。
 /// `cancel` が立ったら、次の知らせを受けたところで読むのをやめる。

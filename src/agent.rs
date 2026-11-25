@@ -320,6 +320,23 @@ pub fn agent_screen(
         }
     };
 
+    // 返事を止めるときは、Field の側でも止めてもらう（裏で送り、結果は待たない）。
+    let cancel_remote = move || {
+        if !sending.get_untracked() {
+            return;
+        }
+        let (Some(access), Some(current), Some(session)) = (
+            token.get_untracked(),
+            tenant.get_untracked(),
+            chat.session.get_untracked(),
+        ) else {
+            return;
+        };
+        std::thread::spawn(move || {
+            let _ = api::agent_cancel(&access, &current, &session);
+        });
+    };
+
     let submit = move |typed: String, picked: Vec<field_glass::PickedFile>| {
         if sending.get_untracked() {
             return;
@@ -544,6 +561,7 @@ pub fn agent_screen(
         }
         // 返事の途中で送ったら、今の返事を止めて、この頼みで続ける。
         if sending.get_untracked() {
+            cancel_remote();
             chat.stop_with("止めて、次の頼みに切り替えました");
         }
         draft.set(String::new());
@@ -613,6 +631,7 @@ pub fn agent_screen(
                 on_back: |_| {},
                 action_label: "新しい会話",
                 on_action: move |_| {
+                    cancel_remote();
                     chat.stop();
                     messages.set(Vec::new());
                     chat.retry.set(None);
@@ -714,7 +733,10 @@ pub fn agent_screen(
                 sending: sending,
                 pending: chat.pending,
                 on_send: move |_| send(),
-                on_stop: move |_| chat.stop(),
+                on_stop: move |_| {
+                    cancel_remote();
+                    chat.stop();
+                },
             )
             // 下に浮かぶタブ、またはキーボードの分だけあける。
             View(
