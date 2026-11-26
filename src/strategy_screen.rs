@@ -272,7 +272,7 @@ pub(crate) fn strategy_screen(
                             on_refresh: move |_| tree.refresh(),
                         )
                         DivisionTabs(tree: tree)
-                        Legend(tree: tree)
+                        Legend(tree: tree, has_rows: computed(move || !rows.with(Vec::is_empty)))
                         Show(when: move || summary.with(Option::is_some)) {
                             Text(
                                 value: computed(move || summary.get().unwrap_or_default()),
@@ -445,8 +445,9 @@ fn division_tabs(tree: Tree) -> Element {
 }
 
 /// 段の凡例（MVV → 目標 → KR → 施策 → 行動）と、まとめて開閉するボタン。
+/// 開閉するものがない空のツリーでは、ボタンを出さない。
 #[component]
-fn legend(tree: Tree) -> Element {
+fn legend(tree: Tree, has_rows: Signal<bool>) -> Element {
     let items: Vec<(usize, &'static str)> = model::LEGEND.iter().copied().enumerate().collect();
     render! {
         View(
@@ -489,28 +490,30 @@ fn legend(tree: Tree) -> Element {
                     },
                 )
             }
-            View(
-                style: css!(
-                    display: Display::Flex,
-                    flex_direction: FlexDirection::Row,
-                    gap: px(16),
-                ),
-            ) {
-                Text(
-                    value: "すべて開く",
-                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
-                    on_tap: move |_| tree.collapsed.set(HashSet::new()),
-                )
-                Text(
-                    value: "目標まで閉じる",
-                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
-                    on_tap: move |_| {
-                        let set = tree.workspace.with_untracked(|ws| {
-                            ws.as_ref().map(model::collapse_to_objectives).unwrap_or_default()
-                        });
-                        tree.collapsed.set(set);
-                    },
-                )
+            Show(when: move || has_rows.get()) {
+                View(
+                    style: css!(
+                        display: Display::Flex,
+                        flex_direction: FlexDirection::Row,
+                        gap: px(16),
+                    ),
+                ) {
+                    Text(
+                        value: "すべて開く",
+                        style: computed(move || css!(color: hex(TINT), font_size: px(14))),
+                        on_tap: move |_| tree.collapsed.set(HashSet::new()),
+                    )
+                    Text(
+                        value: "目標まで閉じる",
+                        style: computed(move || css!(color: hex(TINT), font_size: px(14))),
+                        on_tap: move |_| {
+                            let set = tree.workspace.with_untracked(|ws| {
+                                ws.as_ref().map(model::collapse_to_objectives).unwrap_or_default()
+                            });
+                            tree.collapsed.set(set);
+                        },
+                    )
+                }
             }
         }
     }
@@ -1158,5 +1161,101 @@ fn related_group(
                 },
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use whisker::runtime::reactive::{__reset_for_tests, flush, Owner};
+    use whisker::runtime::view::{BindType, DynRenderer, install_renderer, uninstall_renderer};
+    use whisker_engine::whisker_style::SpecifiedStyle;
+
+    /// Keeps the text of every element that is still mounted.
+    #[derive(Default)]
+    struct Recorder {
+        next: Cell<u32>,
+        texts: Rc<RefCell<HashMap<u32, String>>>,
+    }
+
+    impl DynRenderer for Recorder {
+        fn create_element(&self, _: ElementTag) -> Element {
+            let id = self.next.get();
+            self.next.set(id + 1);
+            Element::from_raw(id)
+        }
+        fn create_element_by_name(&self, _: &str) -> Element {
+            self.create_element(ElementTag::View)
+        }
+        fn release_element(&self, handle: Element) {
+            self.texts.borrow_mut().remove(&handle.id());
+        }
+        fn set_attribute(&self, handle: Element, key: &str, value: &str) {
+            if key == "text" {
+                self.texts.borrow_mut().insert(handle.id(), value.into());
+            }
+        }
+        fn set_specified_style(&self, _: Element, _: &SpecifiedStyle) -> bool {
+            true
+        }
+        fn append_child(&self, _: Element, _: Element) {}
+        fn remove_child(&self, _: Element, _: Element) {}
+        fn set_event_listener(
+            &self,
+            _: Element,
+            _: &str,
+            _: BindType,
+            _: Box<dyn Fn(whisker::WhiskerValue) + 'static>,
+        ) {
+        }
+        fn set_root(&self, _: Element) {}
+        fn flush(&self) {}
+    }
+
+    fn empty_tree() -> Tree {
+        Tree {
+            token: signal(None),
+            tenant: signal(None),
+            department: signal(String::new()),
+            workspace: signal(None),
+            organizations: signal(Vec::new()),
+            counts: signal(HashMap::new()),
+            me: signal(None),
+            knowledge: signal(Vec::new()),
+            collapsed: signal(HashSet::new()),
+            loading: signal(false),
+            quiet: signal(false),
+            error: signal(String::new()),
+            generation: signal(0),
+        }
+    }
+
+    #[test]
+    fn bulk_controls_show_only_while_the_tree_has_rows() {
+        __reset_for_tests();
+        let recorder = Recorder::default();
+        let texts = recorder.texts.clone();
+        let previous = install_renderer(Box::new(recorder));
+        let owner = Owner::new(None);
+        owner.with(|| {
+            let has = signal(false);
+            let _legend = render! {
+                Legend(tree: empty_tree(), has_rows: computed(move || has.get()))
+            };
+            flush();
+            let shown = |label: &str| texts.borrow().values().any(|text| text == label);
+            assert!(shown("→"), "the level legend stays on an empty tree");
+            assert!(!shown("すべて開く") && !shown("目標まで閉じる"));
+            has.set(true);
+            flush();
+            assert!(shown("すべて開く") && shown("目標まで閉じる"));
+            has.set(false);
+            flush();
+            assert!(!shown("すべて開く") && !shown("目標まで閉じる"));
+        });
+        owner.dispose();
+        uninstall_renderer(previous);
     }
 }
