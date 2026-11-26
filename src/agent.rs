@@ -89,6 +89,10 @@ pub struct AgentChat {
     files: RwSignal<Vec<api::AgentFile>>,
     /// 送る前の添付ファイル（入力欄の上に並ぶ）。
     pending: RwSignal<Vec<field_glass::PickedFile>>,
+    /// 返事の途中で送った頼み。今の返事が終わったら（「今すぐ送る」なら止めて）送る。
+    queued: RwSignal<Option<Retry>>,
+    /// 「新しい会話」を押すたびに進む番号。順番待ちの頼みを前の会話へ送らないため。
+    conversation: RwSignal<usize>,
     /// 今流れている返事を止める旗。
     cancel: RwSignal<Option<Arc<AtomicBool>>>,
     /// 最後の失敗の知らせ（行の ID）と、送り直す頼み。
@@ -112,6 +116,8 @@ impl AgentChat {
             expanded: signal(Vec::new()),
             files: signal(Vec::new()),
             pending: signal(Vec::new()),
+            queued: signal(None),
+            conversation: signal(0),
             cancel: signal(None),
             retry: signal(None),
             last_event: signal(Instant::now()),
@@ -559,15 +565,80 @@ pub fn agent_screen(
         if (typed.is_empty() && picked.is_empty()) || tenant.with_untracked(Option::is_none) {
             return;
         }
-        // 返事の途中で送ったら、今の返事を止めて、この頼みで続ける。
-        // Field は次の頼みを流す前に、前の返事を自分で止める。
-        if sending.get_untracked() {
-            chat.stop_with("止めて、次の頼みに切り替えました");
-        }
         draft.set(String::new());
         chat.pending.set(Vec::new());
+        // 返事の途中で送ったら順番待ちにして、今の返事が終わってから送る。
+        // 待っている間にもう一度送ったら、続けて一つの頼みにする。
+        if sending.get_untracked() {
+            chat.queued.update(|queued| match queued {
+                Some(waiting) => {
+                    waiting.typed = queue_text(&waiting.typed, &typed);
+                    waiting.picked.extend(picked);
+                }
+                None => *queued = Some(Retry { typed, picked }),
+            });
+            return;
+        }
         submit(typed, picked);
     };
+
+    // 順番待ちの頼みを入力欄へ戻す（取り消し・■ で止めたとき）。
+    let take_back_queued = move || {
+        if let Some(waiting) = chat.queued.get_untracked() {
+            chat.queued.set(None);
+            draft.update(|d| *d = queue_text(&waiting.typed, d.trim()));
+            chat.pending.update(|p| {
+                let mut files = waiting.picked;
+                files.append(p);
+                *p = files;
+            });
+        }
+    };
+
+    // 返事が終わったら（「今すぐ送る」で止めたときも）、順番待ちの頼みを送る。
+    // 失敗で終わったときは送らずに入力欄へ戻す（元の頼みなしで続きだけが流れ、
+    // 失敗の知らせと送り直しも消えてしまうため）。
+    effect(move || {
+        if sending.get() || chat.queued.with(Option::is_none) {
+            return;
+        }
+        if chat.retry.with_untracked(Option::is_some) {
+            take_back_queued();
+            return;
+        }
+        let Some(next) = chat.queued.get_untracked() else {
+            return;
+        };
+        chat.queued.set(None);
+        let conversation = chat.conversation.get_untracked();
+        // 今の返事の後片付けが済んでから送る。その間に別の頼みが始まったら順番待ちへ戻し、
+        // 新しい会話に移っていたら入力欄へ戻す。
+        spawn_in(chat.owner, async move {
+            // `stall` は返事を終えてから失敗を知らせるので、ここでも見る。
+            if chat.conversation.get_untracked() != conversation
+                || chat.retry.with_untracked(Option::is_some)
+            {
+                draft.update(|d| *d = queue_text(&next.typed, d.trim()));
+                chat.pending.update(|p| {
+                    let mut files = next.picked;
+                    files.append(p);
+                    *p = files;
+                });
+            } else if sending.get_untracked() {
+                chat.queued.update(|queued| match queued {
+                    Some(waiting) => {
+                        waiting.typed = queue_text(&next.typed, &waiting.typed);
+                        let mut files = next.picked;
+                        files.append(&mut waiting.picked);
+                        waiting.picked = files;
+                    }
+                    None => *queued = Some(next),
+                });
+            } else {
+                submit(next.typed, next.picked);
+            }
+        });
+    });
 
     // 失敗した頼みを送り直す。上げ終わって消えた添付は、会話に残っているので付け直さない。
     let retry = move || {
@@ -631,6 +702,8 @@ pub fn agent_screen(
                 on_back: |_| {},
                 action_label: "新しい会話",
                 on_action: move |_| {
+                    chat.queued.set(None);
+                    chat.conversation.update(|n| *n += 1);
                     cancel_remote();
                     chat.stop();
                     messages.set(Vec::new());
@@ -732,11 +805,16 @@ pub fn agent_screen(
                 input: input,
                 sending: sending,
                 pending: chat.pending,
+                queued: chat.queued,
                 on_send: move |_| send(),
                 on_stop: move |_| {
+                    take_back_queued();
                     cancel_remote();
                     chat.stop();
                 },
+                // 今の返事を止めて、順番待ちの頼みをすぐ送る。前の返事は Field が止める。
+                on_send_now: move |_| chat.stop_with("止めて、次の頼みに切り替えました"),
+                on_cancel_queued: move |_| take_back_queued(),
             )
             // 下に浮かぶタブ、またはキーボードの分だけあける。
             View(
@@ -756,8 +834,11 @@ fn composer(
     input: InputRef,
     sending: RwSignal<bool>,
     pending: RwSignal<Vec<field_glass::PickedFile>>,
+    queued: RwSignal<Option<Retry>>,
     on_send: Callback<()>,
     on_stop: Callback<()>,
+    on_send_now: Callback<()>,
+    on_cancel_queued: Callback<()>,
 ) -> Element {
     render! {
         View(
@@ -769,6 +850,14 @@ fn composer(
                 padding: (px(6), px(12), px(8), px(12)),
             ),
         ) {
+            // 返事のあとに送る頼み。「今すぐ送る」で今の返事を止めて送る。
+            Show(when: move || queued.with(Option::is_some)) {
+                QueuedBar(
+                    text: computed(move || queued.with(|q| q.as_ref().map(queued_label).unwrap_or_default())),
+                    on_send_now: on_send_now,
+                    on_cancel: on_cancel_queued,
+                )
+            }
             // 送る前の添付ファイル。× で外せる。
             View(
                 style: css!(
@@ -852,7 +941,7 @@ fn composer(
                     on_tap: move |_| {
                         let typed = !draft.with_untracked(|d| d.trim().is_empty())
                             || pending.with_untracked(|p| !p.is_empty());
-                        // 返事の途中でも、入力があれば送る（今の返事は止めて切り替える）。
+                        // 返事の途中でも、入力があれば送る（順番待ちにして、返事のあとに送る）。
                         if send_button(sending.get_untracked(), typed) == SendButton::Stop {
                             on_stop.run(());
                         } else {
@@ -890,7 +979,7 @@ fn composer(
 enum SendButton {
     /// 返事の途中で、入力が空：■ で止める。
     Stop,
-    /// 入力がある：↑ で送る。返事の途中なら、止めてから送る。
+    /// 入力がある：↑ で送る。返事の途中なら、順番待ちにして返事のあとに送る。
     Send,
     /// 返事もなく入力も空。
     Disabled,
@@ -1061,6 +1150,88 @@ fn attachment_chip(name: String, on_remove: Callback<()>) -> Element {
                 )),
             ) {
                 Text(value: "✕", style: computed(move || css!(color: hex(FILL), font_size: px(11), font_weight: FontWeight::Bold)))
+            }
+        }
+    }
+}
+
+/// 順番待ちの頼みに、続けて送った文を足す。
+fn queue_text(waiting: &str, more: &str) -> String {
+    match (waiting.is_empty(), more.is_empty()) {
+        (true, _) => more.to_owned(),
+        (_, true) => waiting.to_owned(),
+        _ => format!("{waiting}\n{more}"),
+    }
+}
+
+/// 順番待ちの頼みの見出し：文と、添付の数。
+fn queued_label(waiting: &Retry) -> String {
+    let files = waiting.picked.len();
+    match (waiting.typed.is_empty(), files) {
+        (_, 0) => waiting.typed.clone(),
+        (true, n) => format!("📎 {n} 件"),
+        (false, n) => format!("{}（📎 {n} 件）", waiting.typed),
+    }
+}
+
+/// 入力欄の上の「返事のあとに送ります」の札。
+#[component]
+fn queued_bar(text: Signal<String>, on_send_now: Callback<()>, on_cancel: Callback<()>) -> Element {
+    render! {
+        View(
+            style: computed(move || css!(
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                gap: px(8),
+                padding: (px(8), px(8), px(8), px(14)),
+                border_radius: px(18),
+                background_color: hex(FILL),
+            )),
+        ) {
+            View(
+                style: css!(
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                ),
+            ) {
+                Text(
+                    value: "返事のあとに送ります",
+                    style: computed(move || css!(color: hex(SECONDARY_LABEL), font_size: px(12))),
+                )
+                Text(
+                    value: text,
+                    max_lines: 1u32,
+                    style: computed(move || css!(
+                        color: hex(LABEL),
+                        font_size: px(15),
+                        text_overflow: TextOverflow::Ellipsis,
+                    )),
+                )
+            }
+            View(
+                on_tap: move |_| on_send_now.run(()),
+                style: computed(move || css!(
+                    padding: (px(6), px(12)),
+                    border_radius: px(15),
+                    background_color: hex(TINT),
+                )),
+            ) {
+                Text(
+                    value: "今すぐ送る",
+                    style: computed(move || css!(color: Color::hex(0xFFFFFF), font_size: px(14), font_weight: FontWeight::Numeric(600))),
+                )
+            }
+            View(
+                on_tap: move |_| on_cancel.run(()),
+                style: css!(padding: (px(6), px(8))),
+            ) {
+                Text(
+                    value: "取り消す",
+                    style: computed(move || css!(color: hex(TINT), font_size: px(14))),
+                )
             }
         }
     }
@@ -1422,6 +1593,18 @@ mod tests {
         assert_eq!(send_button(true, true), SendButton::Send);
         assert_eq!(send_button(false, true), SendButton::Send);
         assert_eq!(send_button(false, false), SendButton::Disabled);
+    }
+
+    #[test]
+    fn messages_sent_while_waiting_join_into_one() {
+        assert_eq!(queue_text("", "来週分にして"), "来週分にして");
+        assert_eq!(queue_text("来週分にして", "金額も"), "来週分にして\n金額も");
+        assert_eq!(queue_text("来週分にして", ""), "来週分にして");
+        let waiting = Retry {
+            typed: "これも見て".into(),
+            picked: Vec::new(),
+        };
+        assert_eq!(queued_label(&waiting), "これも見て");
     }
 
     #[test]
