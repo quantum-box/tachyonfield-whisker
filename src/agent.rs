@@ -91,6 +91,8 @@ pub struct AgentChat {
     pending: RwSignal<Vec<field_glass::PickedFile>>,
     /// 返事の途中で送った頼み。今の返事が終わったら（「今すぐ送る」なら止めて）送る。
     queued: RwSignal<Option<Retry>>,
+    /// 「新しい会話」を押すたびに進む番号。順番待ちの頼みを前の会話へ送らないため。
+    conversation: RwSignal<usize>,
     /// 今流れている返事を止める旗。
     cancel: RwSignal<Option<Arc<AtomicBool>>>,
     /// 最後の失敗の知らせ（行の ID）と、送り直す頼み。
@@ -115,6 +117,7 @@ impl AgentChat {
             files: signal(Vec::new()),
             pending: signal(Vec::new()),
             queued: signal(None),
+            conversation: signal(0),
             cancel: signal(None),
             retry: signal(None),
             last_event: signal(Instant::now()),
@@ -579,19 +582,6 @@ pub fn agent_screen(
         submit(typed, picked);
     };
 
-    // 返事が終わったら（失敗・「今すぐ送る」で止めたときも）、順番待ちの頼みを送る。
-    effect(move || {
-        if sending.get() || chat.queued.with(Option::is_none) {
-            return;
-        }
-        let Some(next) = chat.queued.get_untracked() else {
-            return;
-        };
-        chat.queued.set(None);
-        // 今の返事の後片付けが済んでから送る。
-        spawn_in(chat.owner, async move { submit(next.typed, next.picked) });
-    });
-
     // 順番待ちの頼みを入力欄へ戻す（取り消し・■ で止めたとき）。
     let take_back_queued = move || {
         if let Some(waiting) = chat.queued.get_untracked() {
@@ -604,6 +594,52 @@ pub fn agent_screen(
             });
         }
     };
+
+    // 返事が終わったら（「今すぐ送る」で止めたときも）、順番待ちの頼みを送る。
+    // 失敗で終わったときは送らずに入力欄へ戻す（元の頼みなしで続きだけが流れ、
+    // 失敗の知らせと送り直しも消えてしまうため）。
+    effect(move || {
+        if sending.get() || chat.queued.with(Option::is_none) {
+            return;
+        }
+        if chat.retry.with_untracked(Option::is_some) {
+            take_back_queued();
+            return;
+        }
+        let Some(next) = chat.queued.get_untracked() else {
+            return;
+        };
+        chat.queued.set(None);
+        let conversation = chat.conversation.get_untracked();
+        // 今の返事の後片付けが済んでから送る。その間に別の頼みが始まったら順番待ちへ戻し、
+        // 新しい会話に移っていたら入力欄へ戻す。
+        spawn_in(chat.owner, async move {
+            // `stall` は返事を終えてから失敗を知らせるので、ここでも見る。
+            if chat.conversation.get_untracked() != conversation
+                || chat.retry.with_untracked(Option::is_some)
+            {
+                draft.update(|d| *d = queue_text(&next.typed, d.trim()));
+                chat.pending.update(|p| {
+                    let mut files = next.picked;
+                    files.append(p);
+                    *p = files;
+                });
+            } else if sending.get_untracked() {
+                chat.queued.update(|queued| match queued {
+                    Some(waiting) => {
+                        waiting.typed = queue_text(&next.typed, &waiting.typed);
+                        let mut files = next.picked;
+                        files.append(&mut waiting.picked);
+                        waiting.picked = files;
+                    }
+                    None => *queued = Some(next),
+                });
+            } else {
+                submit(next.typed, next.picked);
+            }
+        });
+    });
+
 
     // 失敗した頼みを送り直す。上げ終わって消えた添付は、会話に残っているので付け直さない。
     let retry = move || {
@@ -668,6 +704,7 @@ pub fn agent_screen(
                 action_label: "新しい会話",
                 on_action: move |_| {
                     chat.queued.set(None);
+                    chat.conversation.update(|n| *n += 1);
                     cancel_remote();
                     chat.stop();
                     messages.set(Vec::new());
