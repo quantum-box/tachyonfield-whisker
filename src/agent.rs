@@ -640,7 +640,6 @@ pub fn agent_screen(
         });
     });
 
-
     // 失敗した頼みを送り直す。上げ終わって消えた添付は、会話に残っているので付け直さない。
     let retry = move || {
         let Some((_, again)) = chat.retry.get_untracked() else {
