@@ -677,7 +677,8 @@ pub fn cash_book_screen(token: RwSignal<Option<String>>, tenant: RwSignal<Option
         Some(if has_books {
             "この日に従来の記録はありません。新しく記入するには上で店舗・レジの帳簿を選んでください。".to_owned()
         } else {
-            "店舗・レジの帳簿がまだありません。管理者に Web の「帳簿設定」で作ってもらってください。".to_owned()
+            "店舗・レジの帳簿がまだありません。\n右上の「帳簿設定」で追加できます（要権限）。\n権限がなければ管理者に追加をご依頼ください。"
+                .to_owned()
         })
     });
 
